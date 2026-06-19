@@ -1,0 +1,683 @@
+openapi: 3.1.0
+info:
+  title: Simse API
+  version: "2026-06-01"
+  description: |
+    The Simse public REST API at `api.simse.dev`. The flagship endpoint
+    `POST /v1/messages` is **wire-compatible with the Anthropic Messages API** —
+    the official Anthropic client patterns work against it. Models: `rye`
+    (Qwen3.5-4B) and `zoysia` (Qwen3.5-9B, default).
+
+    Authoritative contract: `sdk/CONTRACT.md`. Gateway: `simse-warp`.
+  license:
+    name: MIT
+servers:
+  - url: https://api.simse.dev
+security:
+  - ApiKeyHeader: []
+  - BearerAuth: []
+tags:
+  - name: Messages
+  - name: Models
+  - name: Account
+  - name: Sessions
+  - name: Memories
+  - name: Plugins
+  - name: ProjectManagement
+  - name: Flags
+
+paths:
+  /v1/messages:
+    post:
+      tags: [Messages]
+      operationId: createMessage
+      summary: Create a Message (Anthropic-wire-compatible).
+      parameters:
+        - $ref: "#/components/parameters/AnthropicVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateMessageRequest" }
+      responses:
+        "200":
+          description: |
+            A `Message` (when `stream` is false), or a `text/event-stream` of
+            named SSE events (when `stream` is true).
+          headers:
+            request-id: { $ref: "#/components/headers/RequestId" }
+            anthropic-ratelimit-requests-limit: { $ref: "#/components/headers/RateLimitLimit" }
+            anthropic-ratelimit-requests-remaining: { $ref: "#/components/headers/RateLimitRemaining" }
+            anthropic-ratelimit-requests-reset: { $ref: "#/components/headers/RateLimitReset" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Message" }
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream of MessageStreamEvent (event/data lines).
+        "400": { $ref: "#/components/responses/AnthropicError" }
+        "401": { $ref: "#/components/responses/AnthropicError" }
+        "429": { $ref: "#/components/responses/AnthropicError" }
+        "503": { $ref: "#/components/responses/AnthropicError" }
+
+  /v1/messages/count_tokens:
+    post:
+      tags: [Messages]
+      operationId: countTokens
+      summary: Count input tokens for a Messages request (estimate).
+      parameters:
+        - $ref: "#/components/parameters/AnthropicVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CountTokensRequest" }
+      responses:
+        "200":
+          description: Token count.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [input_tokens]
+                properties:
+                  input_tokens: { type: integer }
+        "400": { $ref: "#/components/responses/AnthropicError" }
+        "401": { $ref: "#/components/responses/AnthropicError" }
+
+  /v1/models:
+    get:
+      tags: [Models]
+      operationId: listModels
+      summary: List available models.
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 20 } }
+        - { name: before_id, in: query, schema: { type: string } }
+        - { name: after_id, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: A page of models.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelList" }
+
+  /v1/models/{model_id}:
+    get:
+      tags: [Models]
+      operationId: getModel
+      summary: Retrieve a single model.
+      parameters:
+        - { name: model_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: A model object.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Model" }
+        "404": { $ref: "#/components/responses/AnthropicError" }
+
+  /v1/account:
+    get:
+      tags: [Account]
+      operationId: getAccount
+      summary: Get the authenticated account.
+      responses:
+        "200":
+          description: Account.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  user_id: { type: string }
+                  plan: { type: string }
+
+  /v1/usage:
+    get:
+      tags: [Account]
+      operationId: getUsage
+      summary: Get token usage for the current period.
+      responses:
+        "200":
+          description: Usage.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  period: { type: string }
+                  requests: { type: integer }
+                  tokens: { type: integer }
+                  by_model:
+                    type: object
+                    additionalProperties: { type: integer }
+
+  /v1/usage/dashboard:
+    get:
+      tags: [Account]
+      operationId: getUsageDashboard
+      summary: Rich per-model usage view (included-vs-extra split + compute window).
+      responses:
+        "200":
+          description: Usage dashboard.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plan: { type: string }
+                  periodStart: { type: integer }
+                  models:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        model: { type: string }
+                        includedInputTokens: { type: integer }
+                        includedOutputTokens: { type: integer }
+                        extraInputTokens: { type: integer }
+                        extraOutputTokens: { type: integer }
+                        extraSpendCents: { type: integer }
+                        requestCount: { type: integer }
+                        multiplier: { type: number }
+                  billing: { type: object, additionalProperties: true }
+                  compute: { type: [object, "null"], additionalProperties: true }
+
+  /v1/agents:
+    get:
+      tags: [Account]
+      operationId: listAgents
+      summary: Subagent run history (newest first).
+      responses:
+        "200":
+          description: Agents.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        description: { type: string }
+                        status: { type: string }
+                        started_at: { type: [string, integer] }
+                        completed_at: { type: [string, integer] }
+                        duration_ms: { type: integer }
+                        turns: { type: integer }
+                        input_tokens: { type: integer }
+                        output_tokens: { type: integer }
+                        error: { type: [string, "null"] }
+
+  /v1/billing:
+    get:
+      tags: [Account]
+      operationId: getBilling
+      summary: Get plan + limits.
+      responses:
+        "200":
+          description: Billing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plan: { type: string }
+                  status: { type: string }
+                  limits: { type: object, additionalProperties: true }
+                  current_usage: { type: object, additionalProperties: true }
+
+  /v1/sessions:
+    post:
+      tags: [Sessions]
+      operationId: createSession
+      summary: Create an agentic session.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model: { type: string }
+                title: { type: string }
+      responses:
+        "200":
+          description: Session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+    get:
+      tags: [Sessions]
+      operationId: listSessions
+      summary: List sessions.
+      responses:
+        "200":
+          description: Sessions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items: { $ref: "#/components/schemas/Session" }
+
+  /v1/sessions/{id}:
+    get:
+      tags: [Sessions]
+      operationId: getSession
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "404": { $ref: "#/components/responses/LegacyError" }
+    delete:
+      tags: [Sessions]
+      operationId: deleteSession
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: Deleted. }
+
+  /v1/sessions/{id}/messages:
+    post:
+      tags: [Sessions]
+      operationId: promptSession
+      summary: Send a prompt to a session (buffered or streamed).
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+                stream: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Buffered turn, or an SSE stream of prompt events.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: object
+                    properties:
+                      role: { type: string }
+                      content: { type: string }
+                  usage: { $ref: "#/components/schemas/SessionUsage" }
+            text/event-stream:
+              schema: { type: string }
+
+  /v1/sessions/{id}/resume:
+    post:
+      tags: [Sessions]
+      operationId: resumeSession
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: Resumed. } }
+
+  /v1/sessions/{id}/abort:
+    post:
+      tags: [Sessions]
+      operationId: abortSession
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: Aborted. } }
+
+  /v1/memories:
+    get:
+      tags: [Memories]
+      operationId: listMemories
+      responses: { "200": { description: Memories. } }
+    post:
+      tags: [Memories]
+      operationId: addMemory
+      requestBody:
+        content: { application/json: { schema: { type: object } } }
+      responses: { "200": { description: Created. } }
+  /v1/memories/stats:
+    get:
+      tags: [Memories]
+      operationId: memoryStats
+      responses: { "200": { description: Stats. } }
+  /v1/memories/{id}:
+    delete:
+      tags: [Memories]
+      operationId: deleteMemory
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: Deleted. } }
+
+  /v1/plugins:
+    get: { tags: [Plugins], operationId: listPlugins, responses: { "200": { description: Plugins. } } }
+  /v1/plugins/registry:
+    get: { tags: [Plugins], operationId: listRegistry, responses: { "200": { description: Registry. } } }
+  /v1/plugins/registry/{id}:
+    get:
+      tags: [Plugins]
+      operationId: registryDetail
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: Registry entry. } }
+  /v1/plugins/installed:
+    get: { tags: [Plugins], operationId: listInstalled, responses: { "200": { description: Installed. } } }
+  /v1/plugins/install:
+    post:
+      tags: [Plugins]
+      operationId: installPlugin
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Installed. } }
+  /v1/plugins/uninstall:
+    post:
+      tags: [Plugins]
+      operationId: uninstallPlugin
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Uninstalled. } }
+
+  /v1/sessions/{id}/tasks:
+    get:
+      tags: [ProjectManagement]
+      operationId: listTasks
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: Tasks. } }
+    post:
+      tags: [ProjectManagement]
+      operationId: createTask
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Created. } }
+  /v1/sessions/{id}/projects:
+    get:
+      tags: [ProjectManagement]
+      operationId: listProjects
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: Projects. } }
+  /v1/sessions/{id}/todos:
+    get:
+      tags: [ProjectManagement]
+      operationId: getTodos
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: Todos (read-only). } }
+  /v1/schedules:
+    get: { tags: [ProjectManagement], operationId: listSchedules, responses: { "200": { description: Schedules. } } }
+    post:
+      tags: [ProjectManagement]
+      operationId: createSchedule
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Created. } }
+  /v1/workflows:
+    get: { tags: [ProjectManagement], operationId: listWorkflows, responses: { "200": { description: Workflows. } } }
+    post:
+      tags: [ProjectManagement]
+      operationId: createWorkflow
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Created. } }
+
+  /v1/flags:
+    get:
+      tags: [Flags]
+      operationId: getFlags
+      summary: Feature flags enabled for the caller.
+      responses:
+        "200":
+          description: Flags.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  flags:
+                    type: object
+                    additionalProperties: { type: boolean }
+
+components:
+  securitySchemes:
+    ApiKeyHeader:
+      type: apiKey
+      in: header
+      name: x-api-key
+    BearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    AnthropicVersion:
+      name: anthropic-version
+      in: header
+      required: false
+      schema: { type: string, default: "2026-06-01" }
+  headers:
+    RequestId:
+      description: Unique request id (`req_…`).
+      schema: { type: string }
+    RateLimitLimit:
+      description: Per-window request budget.
+      schema: { type: integer }
+    RateLimitRemaining:
+      description: Requests remaining in the window.
+      schema: { type: integer }
+    RateLimitReset:
+      description: RFC 3339 UTC time the window resets.
+      schema: { type: string, format: date-time }
+  responses:
+    AnthropicError:
+      description: Anthropic-shaped error.
+      headers:
+        request-id: { $ref: "#/components/headers/RequestId" }
+        retry-after:
+          description: Seconds to wait before retrying (on 429).
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AnthropicError" }
+    LegacyError:
+      description: Legacy-shaped error (platform surfaces).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/LegacyError" }
+  schemas:
+    CreateMessageRequest:
+      type: object
+      required: [model, messages, max_tokens]
+      properties:
+        model: { type: string, examples: ["zoysia"] }
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/InputMessage" }
+        max_tokens: { type: integer, minimum: 1 }
+        system:
+          oneOf:
+            - { type: string }
+            - { type: array, items: { $ref: "#/components/schemas/TextBlock" } }
+        temperature: { type: number, minimum: 0, maximum: 1 }
+        top_p: { type: number, minimum: 0, maximum: 1 }
+        top_k: { type: integer }
+        stop_sequences: { type: array, items: { type: string } }
+        stream: { type: boolean, default: false }
+        tools:
+          type: array
+          items: { $ref: "#/components/schemas/Tool" }
+        tool_choice: { $ref: "#/components/schemas/ToolChoice" }
+        metadata:
+          type: object
+          properties: { user_id: { type: string } }
+    CountTokensRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model: { type: string }
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/InputMessage" }
+        system:
+          oneOf:
+            - { type: string }
+            - { type: array, items: { $ref: "#/components/schemas/TextBlock" } }
+        tools:
+          type: array
+          items: { $ref: "#/components/schemas/Tool" }
+    InputMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string, enum: [user, assistant] }
+        content:
+          oneOf:
+            - { type: string }
+            - { type: array, items: { $ref: "#/components/schemas/InputContentBlock" } }
+    InputContentBlock:
+      oneOf:
+        - { $ref: "#/components/schemas/TextBlock" }
+        - { $ref: "#/components/schemas/ImageBlock" }
+        - { $ref: "#/components/schemas/ToolUseBlock" }
+        - { $ref: "#/components/schemas/ToolResultBlock" }
+      discriminator: { propertyName: type }
+    TextBlock:
+      type: object
+      required: [type, text]
+      properties:
+        type: { type: string, const: text }
+        text: { type: string }
+    ImageBlock:
+      type: object
+      required: [type, source]
+      properties:
+        type: { type: string, const: image }
+        source:
+          type: object
+          required: [type, media_type, data]
+          properties:
+            type: { type: string, const: base64 }
+            media_type: { type: string, enum: [image/jpeg, image/png, image/gif, image/webp] }
+            data: { type: string }
+    ToolUseBlock:
+      type: object
+      required: [type, id, name, input]
+      properties:
+        type: { type: string, const: tool_use }
+        id: { type: string }
+        name: { type: string }
+        input: { type: object, additionalProperties: true }
+    ToolResultBlock:
+      type: object
+      required: [type, tool_use_id]
+      properties:
+        type: { type: string, const: tool_result }
+        tool_use_id: { type: string }
+        content:
+          oneOf:
+            - { type: string }
+            - { type: array, items: { $ref: "#/components/schemas/TextBlock" } }
+        is_error: { type: boolean }
+    Tool:
+      type: object
+      required: [name, input_schema]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        input_schema: { type: object, additionalProperties: true }
+    ToolChoice:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [auto, any, tool, none] }
+        name: { type: string }
+    Message:
+      type: object
+      required: [id, type, role, model, content, stop_reason, usage]
+      properties:
+        id: { type: string, examples: ["msg_013Zva2CMHLNnXjNJJKqJ2EF"] }
+        type: { type: string, const: message }
+        role: { type: string, const: assistant }
+        model: { type: string }
+        content:
+          type: array
+          items: { $ref: "#/components/schemas/OutputContentBlock" }
+        stop_reason:
+          type: [string, "null"]
+          enum: [end_turn, max_tokens, stop_sequence, tool_use, null]
+        stop_sequence: { type: [string, "null"] }
+        usage: { $ref: "#/components/schemas/Usage" }
+    OutputContentBlock:
+      oneOf:
+        - { $ref: "#/components/schemas/TextBlock" }
+        - { $ref: "#/components/schemas/ToolUseBlock" }
+      discriminator: { propertyName: type }
+    Usage:
+      type: object
+      required: [input_tokens, output_tokens]
+      properties:
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+    SessionUsage:
+      type: object
+      description: Anthropic-style token usage (no total_tokens — compute client-side).
+      properties:
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+    Model:
+      type: object
+      required: [id, type, display_name, created_at]
+      properties:
+        id: { type: string }
+        type: { type: string, const: model }
+        display_name: { type: string }
+        created_at: { type: string, format: date-time }
+        max_input_tokens: { type: integer }
+        max_tokens: { type: integer }
+    ModelList:
+      type: object
+      required: [data, has_more]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/Model" } }
+        has_more: { type: boolean }
+        first_id: { type: [string, "null"] }
+        last_id: { type: [string, "null"] }
+    Session:
+      type: object
+      properties:
+        id: { type: string }
+        model: { type: [string, "null"] }
+        title: { type: string }
+        status: { type: string }
+        message_count: { type: integer }
+        created_at: { type: string }
+        updated_at: { type: string }
+    AnthropicError:
+      type: object
+      required: [type, error]
+      properties:
+        type: { type: string, const: error }
+        request_id: { type: string }
+        error:
+          type: object
+          required: [type, message]
+          properties:
+            type:
+              type: string
+              enum:
+                - invalid_request_error
+                - authentication_error
+                - permission_error
+                - not_found_error
+                - request_too_large
+                - rate_limit_error
+                - api_error
+                - overloaded_error
+            message: { type: string }
+    LegacyError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
