@@ -1,1200 +1,3691 @@
 openapi: 3.1.0
 info:
   title: Simse API
-  version: "2026-06-01"
-  description: |
-    The Simse public REST API at `api.simse.dev`. The flagship endpoint
-    `POST /v1/messages` is **wire-compatible with the Anthropic Messages API** —
-    the official Anthropic client patterns work against it. Models: `rye`
-    (Qwen3.5-4B) and `zoysia` (Qwen3.5-9B, default).
+  description: |-
+    The Simse public REST API at `api.simse.dev`. The flagship endpoint `POST /v1/messages` is **wire-compatible with the Anthropic Messages API** — the official Anthropic client patterns work against it. Models: `rye` (Qwen3.5-4B) and `zoysia` (Qwen3.5-9B, default).
 
-    Authoritative contract: `sdk/CONTRACT.md`. Gateway: `simse-warp`.
+    Generated code-first from the `simse-warp` handler annotations (the single source of truth). Authoritative prose contract: `sdk/CONTRACT.md`.
   license:
     name: MIT
+  version: 2026-06-01
 servers:
-  - url: https://api.simse.dev
-security:
-  - ApiKeyHeader: []
-  - BearerAuth: []
-tags:
-  - name: Messages
-  - name: Models
-  - name: Account
-  - name: Sessions
-  - name: Memories
-  - name: Plugins
-  - name: ProjectManagement
-  - name: Flags
-
+- url: https://api.simse.dev
 paths:
-  /v1/messages:
-    post:
-      tags: [Messages]
-      operationId: createMessage
-      summary: Create a Message (Anthropic-wire-compatible).
-      parameters:
-        - $ref: "#/components/parameters/AnthropicVersion"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/CreateMessageRequest" }
-      responses:
-        "200":
-          description: |
-            A `Message` (when `stream` is false), or a `text/event-stream` of
-            named SSE events (when `stream` is true).
-          headers:
-            request-id: { $ref: "#/components/headers/RequestId" }
-            anthropic-ratelimit-requests-limit: { $ref: "#/components/headers/RateLimitLimit" }
-            anthropic-ratelimit-requests-remaining: { $ref: "#/components/headers/RateLimitRemaining" }
-            anthropic-ratelimit-requests-reset: { $ref: "#/components/headers/RateLimitReset" }
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Message" }
-            text/event-stream:
-              schema:
-                type: string
-                description: SSE stream of MessageStreamEvent (event/data lines).
-        "400": { $ref: "#/components/responses/AnthropicError" }
-        "401": { $ref: "#/components/responses/AnthropicError" }
-        "429": { $ref: "#/components/responses/AnthropicError" }
-        "503": { $ref: "#/components/responses/AnthropicError" }
-
-  /v1/messages/count_tokens:
-    post:
-      tags: [Messages]
-      operationId: countTokens
-      summary: Count input tokens for a Messages request (estimate).
-      parameters:
-        - $ref: "#/components/parameters/AnthropicVersion"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/CountTokensRequest" }
-      responses:
-        "200":
-          description: Token count.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [input_tokens]
-                properties:
-                  input_tokens: { type: integer }
-        "400": { $ref: "#/components/responses/AnthropicError" }
-        "401": { $ref: "#/components/responses/AnthropicError" }
-
-  /v1/models:
-    get:
-      tags: [Models]
-      operationId: listModels
-      summary: List available models.
-      parameters:
-        - { name: limit, in: query, schema: { type: integer, default: 20 } }
-        - { name: before_id, in: query, schema: { type: string } }
-        - { name: after_id, in: query, schema: { type: string } }
-      responses:
-        "200":
-          description: A page of models.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ModelList" }
-
-  /v1/models/{model_id}:
-    get:
-      tags: [Models]
-      operationId: getModel
-      summary: Retrieve a single model.
-      parameters:
-        - { name: model_id, in: path, required: true, schema: { type: string } }
-      responses:
-        "200":
-          description: A model object.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Model" }
-        "404": { $ref: "#/components/responses/AnthropicError" }
-
   /v1/account:
     get:
-      tags: [Account]
-      operationId: getAccount
+      tags:
+      - Account
       summary: Get the authenticated account.
+      operationId: getAccount
       responses:
-        "200":
+        '200':
           description: Account.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  id: { type: string }
-                  user_id: { type: string }
-                  plan: { type: string }
-
-  /v1/usage:
-    get:
-      tags: [Account]
-      operationId: getUsage
-      summary: Get token usage for the current period.
-      responses:
-        "200":
-          description: Usage.
+                $ref: '#/components/schemas/Account'
+        '401':
+          description: Missing/invalid credential.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  period: { type: string }
-                  requests: { type: integer }
-                  tokens: { type: integer }
-                  by_model:
-                    type: object
-                    additionalProperties: { type: integer }
-
-  /v1/usage/dashboard:
-    get:
-      tags: [Account]
-      operationId: getUsageDashboard
-      summary: Rich per-model usage view (included-vs-extra split + compute window).
-      responses:
-        "200":
-          description: Usage dashboard.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  plan: { type: string }
-                  periodStart: { type: integer }
-                  models:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        model: { type: string }
-                        includedInputTokens: { type: integer }
-                        includedOutputTokens: { type: integer }
-                        extraInputTokens: { type: integer }
-                        extraOutputTokens: { type: integer }
-                        extraSpendCents: { type: integer }
-                        requestCount: { type: integer }
-                        multiplier: { type: number }
-                  billing: { type: object, additionalProperties: true }
-                  compute: { type: [object, "null"], additionalProperties: true }
-
+                $ref: '#/components/schemas/LegacyError'
   /v1/agents:
     get:
-      tags: [Account]
-      operationId: listAgents
+      tags:
+      - Account
       summary: Subagent run history (newest first).
+      operationId: listAgents
       responses:
-        "200":
-          description: Agents.
+        '200':
+          description: Subagent run history.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  agents:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        id: { type: string }
-                        description: { type: string }
-                        status: { type: string }
-                        started_at: { type: [string, integer] }
-                        completed_at: { type: [string, integer] }
-                        duration_ms: { type: integer }
-                        turns: { type: integer }
-                        input_tokens: { type: integer }
-                        output_tokens: { type: integer }
-                        error: { type: [string, "null"] }
-
+                $ref: '#/components/schemas/AgentList'
+        '401':
+          description: Missing/invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/artifacts:
+    get:
+      tags:
+      - Library
+      summary: List artifacts (filter/sort/page + content_type via query params).
+      operationId: listArtifacts
+      parameters:
+      - name: content_type
+        in: query
+        description: Filter by content type.
+        required: false
+        schema:
+          type: string
+      - name: tags
+        in: query
+        description: Comma-separated tag filter.
+        required: false
+        schema:
+          type: string
+      - name: collection_id
+        in: query
+        description: Restrict to a collection.
+        required: false
+        schema:
+          type: string
+      - name: starred
+        in: query
+        description: Filter by starred flag.
+        required: false
+        schema:
+          type: boolean
+      - name: include_archived
+        in: query
+        description: Include archived artifacts.
+        required: false
+        schema:
+          type: boolean
+      - name: sort
+        in: query
+        description: Sort field.
+        required: false
+        schema:
+          type: string
+      - name: order
+        in: query
+        description: '`asc` or `desc` (default).'
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: Page size.
+        required: false
+        schema:
+          type: integer
+          format: int64
+      - name: cursor
+        in: query
+        description: Keyset page cursor.
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Artifacts `{artifacts, nextCursor}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    post:
+      tags:
+      - Library
+      summary: Upload a raw-body artifact (name + content_type as query params).
+      operationId: putArtifact
+      parameters:
+      - name: name
+        in: query
+        description: Artifact filename (required).
+        required: true
+        schema:
+          type: string
+      - name: content_type
+        in: query
+        description: Artifact MIME type (required).
+        required: true
+        schema:
+          type: string
+      - name: description
+        in: query
+        description: Optional description.
+        required: false
+        schema:
+          type: string
+      - name: collection_id
+        in: query
+        description: Optional collection.
+        required: false
+        schema:
+          type: string
+      - name: tags
+        in: query
+        description: Comma-separated tags.
+        required: false
+        schema:
+          type: string
+      requestBody:
+        description: Raw artifact bytes.
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+        required: true
+      responses:
+        '201':
+          description: Created `{id, sizeBytes}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/artifacts/{id}:
+    get:
+      tags:
+      - Library
+      summary: Download the raw artifact bytes (verbatim).
+      operationId: getArtifact
+      parameters:
+      - name: id
+        in: path
+        description: Artifact id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Raw artifact bytes (Content-Disposition attachment).
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    delete:
+      tags:
+      - Library
+      summary: Delete an artifact.
+      operationId: deleteArtifact
+      parameters:
+      - name: id
+        in: path
+        description: Artifact id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Deleted `{deleted}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/artifacts/{id}/flags:
+    post:
+      tags:
+      - Library
+      summary: Set an artifact's star/archive flags.
+      operationId: setArtifactFlags
+      parameters:
+      - name: id
+        in: path
+        description: Artifact id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: '`{starred?, archived?}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '200':
+          description: Updated `{ok}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
   /v1/billing:
     get:
-      tags: [Account]
-      operationId: getBilling
+      tags:
+      - Account
       summary: Get plan + limits.
+      operationId: getBilling
       responses:
-        "200":
+        '200':
           description: Billing.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  plan: { type: string }
-                  status: { type: string }
-                  limits: { type: object, additionalProperties: true }
-                  current_usage: { type: object, additionalProperties: true }
-
-  /v1/sessions:
+                $ref: '#/components/schemas/Billing'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/flags:
+    get:
+      tags:
+      - Flags
+      summary: Feature flags enabled for the caller.
+      description: |-
+        Evaluates every `v1.*` flag for the authenticated caller and returns
+        `{"flags": {"<flag>": bool, ...}}` so clients/console/app can hide the
+        features the account isn't entitled to. Authed like the rest of `/v1`
+        (individual-user authenticator); fails open (a flags outage reports
+        all-enabled, matching the gate's runtime behaviour). Ungated by design.
+      operationId: getFlags
+      responses:
+        '200':
+          description: Flags `{flags:{flag:bool}}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FlagsResponse'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/library:
+    get:
+      tags:
+      - Library
+      summary: List library documents (filter/sort/page via query params).
+      operationId: listDocuments
+      parameters:
+      - name: kind
+        in: query
+        description: Filter by document kind.
+        required: false
+        schema:
+          type: string
+      - name: collection_id
+        in: query
+        description: Filter by collection.
+        required: false
+        schema:
+          type: string
+      - name: recursive
+        in: query
+        description: Recurse into sub-collections.
+        required: false
+        schema:
+          type: boolean
+      - name: tags
+        in: query
+        description: Comma-separated tag filter.
+        required: false
+        schema:
+          type: string
+      - name: tag_match
+        in: query
+        description: '`any` (default) or `all`.'
+        required: false
+        schema:
+          type: string
+      - name: author
+        in: query
+        description: Filter by author.
+        required: false
+        schema:
+          type: string
+      - name: starred
+        in: query
+        description: Filter by starred flag.
+        required: false
+        schema:
+          type: boolean
+      - name: include_archived
+        in: query
+        description: Include archived docs.
+        required: false
+        schema:
+          type: boolean
+      - name: text
+        in: query
+        description: Substring text filter.
+        required: false
+        schema:
+          type: string
+      - name: sort
+        in: query
+        description: Sort field.
+        required: false
+        schema:
+          type: string
+      - name: order
+        in: query
+        description: '`asc` or `desc` (default).'
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: Page size.
+        required: false
+        schema:
+          type: integer
+          format: int64
+      - name: cursor
+        in: query
+        description: Keyset page cursor.
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Documents `{docs, nextCursor}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
     post:
-      tags: [Sessions]
-      operationId: createSession
-      summary: Create an agentic session.
+      tags:
+      - Library
+      summary: Create a library document.
+      operationId: createDocument
+      requestBody:
+        description: '`{kind, title, body?, summary?, collectionId?, tags?, sourceUrl?}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '201':
+          description: Created `{id, version}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/library/collections:
+    get:
+      tags:
+      - Library
+      summary: List the collection tree.
+      operationId: listCollections
+      responses:
+        '200':
+          description: Collections.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    post:
+      tags:
+      - Library
+      summary: Create a collection.
+      operationId: createCollection
+      requestBody:
+        description: '`{name, parentId?}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '201':
+          description: Created `{id}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/library/collections/{id}:
+    delete:
+      tags:
+      - Library
+      summary: Delete a collection.
+      operationId: deleteCollection
+      parameters:
+      - name: id
+        in: path
+        description: Collection id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Deleted `{deleted}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    patch:
+      tags:
+      - Library
+      summary: Rename a collection.
+      operationId: updateCollection
+      parameters:
+      - name: id
+        in: path
+        description: Collection id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: '`{name}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '200':
+          description: Updated `{ok}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/library/collections/{id}/reorder:
+    post:
+      tags:
+      - Library
+      summary: Set a collection's sort position.
+      operationId: reorderCollection
+      parameters:
+      - name: id
+        in: path
+        description: Collection id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: '`{position}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '200':
+          description: Reordered `{ok}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/library/facets:
+    get:
+      tags:
+      - Library
+      summary: Browse facet counts (kinds/tags/collections + starred/archived/total).
+      operationId: facets
+      parameters:
+      - name: tags
+        in: query
+        description: Comma-separated tag filter.
+        required: false
+        schema:
+          type: string
+      - name: collection_id
+        in: query
+        description: Restrict to a collection.
+        required: false
+        schema:
+          type: string
+      - name: include_archived
+        in: query
+        description: Include archived docs.
+        required: false
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: Facet counts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/library/search:
+    get:
+      tags:
+      - Library
+      summary: Hybrid search over the library.
+      operationId: searchDocuments
+      parameters:
+      - name: q
+        in: query
+        description: The search query (required).
+        required: true
+        schema:
+          type: string
+      - name: mode
+        in: query
+        description: Retrieval mode (`hybrid` default).
+        required: false
+        schema:
+          type: string
+      - name: tags
+        in: query
+        description: Comma-separated tag filter.
+        required: false
+        schema:
+          type: string
+      - name: collection_id
+        in: query
+        description: Restrict to a collection.
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: Page size.
+        required: false
+        schema:
+          type: integer
+          format: int64
+      - name: cursor
+        in: query
+        description: Keyset page cursor.
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Search hits `{hits, nextCursor}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/library/{id}:
+    get:
+      tags:
+      - Library
+      summary: Get one document (meta + body).
+      operationId: getDocument
+      parameters:
+      - name: id
+        in: path
+        description: Document id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Document `{meta, body}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    delete:
+      tags:
+      - Library
+      summary: Delete a document.
+      operationId: deleteDocument
+      parameters:
+      - name: id
+        in: path
+        description: Document id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Deleted `{deleted}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    patch:
+      tags:
+      - Library
+      summary: Partially update a document.
+      operationId: updateDocument
+      parameters:
+      - name: id
+        in: path
+        description: Document id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: '`{body?, title?, summary?, collectionId?, tags?, clearCollection?}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '200':
+          description: Updated `{version}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/library/{id}/backlinks:
+    get:
+      tags:
+      - Library
+      summary: List the documents that cite this document.
+      operationId: listBacklinks
+      parameters:
+      - name: id
+        in: path
+        description: Document id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Backlinks.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/library/{id}/citations:
+    get:
+      tags:
+      - Library
+      summary: List a document's outbound citations.
+      operationId: listCitations
+      parameters:
+      - name: id
+        in: path
+        description: Document id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Citations.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    post:
+      tags:
+      - Library
+      summary: Add a citation (to a document or external source).
+      operationId: addCitation
+      parameters:
+      - name: id
+        in: path
+        description: Document id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: '`{targetKind, targetDocId?, extTitle?, extUrl?, extDoi?, locator?, note?}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '201':
+          description: Created `{id}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/library/{id}/citations/{citation_id}:
+    delete:
+      tags:
+      - Library
+      summary: Remove a citation (citation id is a path param).
+      operationId: removeCitation
+      parameters:
+      - name: id
+        in: path
+        description: Document id.
+        required: true
+        schema:
+          type: string
+      - name: citation_id
+        in: path
+        description: Citation id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Removed `{removed}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/library/{id}/flags:
+    post:
+      tags:
+      - Library
+      summary: Set a document's star/archive flags.
+      operationId: setDocumentFlags
+      parameters:
+      - name: id
+        in: path
+        description: Document id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: '`{starred?, archived?}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '200':
+          description: Updated `{ok}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/library/{id}/move:
+    post:
+      tags:
+      - Library
+      summary: Move a document into (or out of) a collection.
+      operationId: moveDocument
+      parameters:
+      - name: id
+        in: path
+        description: Document id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: '`{collectionId?}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '200':
+          description: Moved `{ok}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/library/{id}/versions:
+    get:
+      tags:
+      - Library
+      summary: List a document's version history.
+      operationId: listVersions
+      parameters:
+      - name: id
+        in: path
+        description: Document id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Versions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/library/{id}/versions/{version}:
+    get:
+      tags:
+      - Library
+      summary: Get a single historical version body.
+      operationId: getVersion
+      parameters:
+      - name: id
+        in: path
+        description: Document id.
+        required: true
+        schema:
+          type: string
+      - name: version
+        in: path
+        description: Version number.
+        required: true
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: Version `{body, meta}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/memories:
+    get:
+      tags:
+      - Memories
+      summary: List or search memories.
+      operationId: listMemories
+      parameters:
+      - name: query
+        in: query
+        description: When set, semantic search instead of recency list.
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: Max entries to return.
+        required: false
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: Memories.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryList'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    post:
+      tags:
+      - Memories
+      summary: Add a memory.
+      operationId: addMemory
       requestBody:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                model: { type: string }
-                title: { type: string }
+              $ref: '#/components/schemas/AddMemoryRequest'
+        required: true
       responses:
-        "200":
-          description: Session.
+        '201':
+          description: Created `{id}`.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Session" }
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/memories/stats:
     get:
-      tags: [Sessions]
-      operationId: listSessions
-      summary: List sessions.
+      tags:
+      - Memories
+      summary: Memory stats.
+      operationId: memoryStats
       responses:
-        "200":
+        '200':
+          description: Stats.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryStats'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/memories/{id}:
+    delete:
+      tags:
+      - Memories
+      summary: Delete a memory.
+      operationId: deleteMemory
+      parameters:
+      - name: id
+        in: path
+        description: Memory id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Deleted `{ok}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/messages:
+    post:
+      tags:
+      - Messages
+      summary: Create a Message (Anthropic-wire-compatible).
+      operationId: createMessage
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMessageRequest'
+        required: true
+      responses:
+        '200':
+          description: A `Message` (when `stream` is false), or a `text/event-stream` of named SSE events (when `stream` is true).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnthropicError'
+        '401':
+          description: Missing/invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnthropicError'
+        '413':
+          description: Body too large.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnthropicError'
+        '429':
+          description: Rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnthropicError'
+        '503':
+          description: Backend unavailable/overloaded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnthropicError'
+  /v1/messages/count_tokens:
+    post:
+      tags:
+      - Messages
+      summary: Count input tokens for a Messages request (estimate).
+      description: |-
+        Same body as `/v1/messages` minus `max_tokens`/`stream`. There is no
+        dedicated loom tokenizer RPC yet, so this returns a chars/4 + per-image
+        estimate (documented as approximate).
+      operationId: countTokens
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CountTokensRequest'
+        required: true
+      responses:
+        '200':
+          description: Token count.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CountTokensResponse'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnthropicError'
+        '401':
+          description: Missing/invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnthropicError'
+  /v1/models:
+    get:
+      tags:
+      - Models
+      summary: List available models.
+      description: |-
+        Resilient: an absent/erroring orchestrator binding falls back to the static
+        hosted-tier catalog so the Models API never 503s.
+      operationId: listModels
+      parameters:
+      - name: limit
+        in: query
+        description: Page size (default 20).
+        required: false
+        schema:
+          type: integer
+          format: int64
+      - name: before_id
+        in: query
+        description: 'Cursor: page before this id.'
+        required: false
+        schema:
+          type: string
+      - name: after_id
+        in: query
+        description: 'Cursor: page after this id.'
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: A page of models.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelList'
+        '401':
+          description: Missing/invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnthropicError'
+  /v1/models/{model_id}:
+    get:
+      tags:
+      - Models
+      summary: Retrieve a single model.
+      operationId: getModel
+      parameters:
+      - name: model_id
+        in: path
+        description: Model id (e.g. `zoysia`).
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: A model object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Model'
+        '401':
+          description: Missing/invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnthropicError'
+        '404':
+          description: Model not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnthropicError'
+  /v1/openapi.json:
+    get:
+      tags:
+      - Meta
+      summary: The OpenAPI 3.1 document describing this API.
+      description: |-
+        The runtime mirror of `warp/openapi.yaml` (both rendered from the same
+        [`crate::openapi::ApiDoc`]). Ungated (no auth, like `GET /v1/flags`) so any
+        client can discover the contract. The route is exempt from the v1 feature
+        gate (`flags::flag_for_path` never matches it) and the v1 envelope still
+        stamps the rate/request-id headers on it like any other `/v1/*` response.
+      operationId: getOpenapi
+      responses:
+        '200':
+          description: The OpenAPI 3.1 document.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+  /v1/plugins:
+    get:
+      tags:
+      - Plugins
+      summary: List tools + the caller's plugins.
+      operationId: listPlugins
+      responses:
+        '200':
+          description: Tools + plugins.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/plugins/install:
+    post:
+      tags:
+      - Plugins
+      summary: Install a plugin.
+      operationId: installPlugin
+      requestBody:
+        description: '`{plugin_name, permissions?, secrets?}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '200':
+          description: Install result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/plugins/installed:
+    get:
+      tags:
+      - Plugins
+      summary: Installed plugins.
+      operationId: listInstalled
+      responses:
+        '200':
+          description: Installed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/plugins/registry:
+    get:
+      tags:
+      - Plugins
+      summary: Marketplace registry listing.
+      operationId: listRegistry
+      responses:
+        '200':
+          description: Registry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/plugins/registry/{id}:
+    get:
+      tags:
+      - Plugins
+      summary: One registry plugin (manifest + readme).
+      operationId: registryDetail
+      parameters:
+      - name: id
+        in: path
+        description: Registry plugin id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Registry entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/plugins/uninstall:
+    post:
+      tags:
+      - Plugins
+      summary: Uninstall a plugin.
+      operationId: uninstallPlugin
+      requestBody:
+        description: '`{plugin_name}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '200':
+          description: Uninstall result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/schedules:
+    get:
+      tags:
+      - ProjectManagement
+      summary: List cron schedules.
+      operationId: listSchedules
+      responses:
+        '200':
+          description: Schedules.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    post:
+      tags:
+      - ProjectManagement
+      summary: Create a cron schedule.
+      operationId: createSchedule
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateScheduleRequest'
+        required: true
+      responses:
+        '201':
+          description: Created `{taskId}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/schedules/{task_id}:
+    delete:
+      tags:
+      - ProjectManagement
+      summary: Delete a cron schedule.
+      operationId: deleteSchedule
+      parameters:
+      - name: task_id
+        in: path
+        description: Schedule task id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Deleted `{deleted}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    patch:
+      tags:
+      - ProjectManagement
+      summary: Update a cron schedule.
+      operationId: updateSchedule
+      parameters:
+      - name: task_id
+        in: path
+        description: Schedule task id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: '`{enabled?, cronExpr?}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '200':
+          description: Updated `{updated}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/sessions:
+    get:
+      tags:
+      - Sessions
+      summary: List sessions.
+      operationId: listSessions
+      responses:
+        '200':
           description: Sessions.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  sessions:
-                    type: array
-                    items: { $ref: "#/components/schemas/Session" }
-
-  /v1/sessions/{id}:
-    get:
-      tags: [Sessions]
-      operationId: getSession
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses:
-        "200":
-          description: Session.
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Session" }
-        "404": { $ref: "#/components/responses/LegacyError" }
-    delete:
-      tags: [Sessions]
-      operationId: deleteSession
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses:
-        "200": { description: Deleted. }
-
-  /v1/sessions/{id}/messages:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
     post:
-      tags: [Sessions]
-      operationId: promptSession
-      summary: Send a prompt to a session (buffered or streamed).
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      tags:
+      - Sessions
+      summary: Create an agentic session.
+      operationId: createSession
       requestBody:
-        required: true
+        description: '`{model?, title?}`'
         content:
           application/json:
             schema:
-              type: object
-              required: [content]
-              properties:
-                content: { type: string }
-                stream: { type: boolean, default: false }
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
       responses:
-        "200":
+        '201':
+          description: Session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/sessions/{id}:
+    get:
+      tags:
+      - Sessions
+      summary: Get one session.
+      operationId: getSession
+      parameters:
+      - name: id
+        in: path
+        description: Session id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    delete:
+      tags:
+      - Sessions
+      summary: Delete a session.
+      operationId: deleteSession
+      parameters:
+      - name: id
+        in: path
+        description: Session id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/sessions/{id}/abort:
+    post:
+      tags:
+      - Sessions
+      summary: Cancel an in-flight prompt.
+      description: |-
+        Cancels an in-flight prompt for the session →
+        `simse.fabric.SessionService.Abort` on the orchestrator.
+      operationId: abortSession
+      parameters:
+      - name: id
+        in: path
+        description: Session id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Aborted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/sessions/{id}/messages:
+    post:
+      tags:
+      - Sessions
+      summary: Send a prompt to a session (buffered or streamed).
+      description: |-
+        `stream:true` → SSE bridge of the upstream `PromptEvent` stream. Otherwise
+        buffer to a single `{message:{role,content}, usage}`.
+      operationId: promptSession
+      parameters:
+      - name: id
+        in: path
+        description: Session id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionPromptRequest'
+        required: true
+      responses:
+        '200':
           description: Buffered turn, or an SSE stream of prompt events.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: object
-                    properties:
-                      role: { type: string }
-                      content: { type: string }
-                  usage: { $ref: "#/components/schemas/SessionUsage" }
-            text/event-stream:
-              schema: { type: string }
-
-  /v1/sessions/{id}/resume:
-    post:
-      tags: [Sessions]
-      operationId: resumeSession
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: Resumed. } }
-
-  /v1/sessions/{id}/abort:
-    post:
-      tags: [Sessions]
-      operationId: abortSession
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: Aborted. } }
-
-  /v1/memories:
-    get:
-      tags: [Memories]
-      operationId: listMemories
-      responses: { "200": { description: Memories. } }
-    post:
-      tags: [Memories]
-      operationId: addMemory
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/AddMemoryRequest" }
-      responses: { "200": { description: Created. } }
-  /v1/memories/stats:
-    get:
-      tags: [Memories]
-      operationId: memoryStats
-      responses: { "200": { description: Stats. } }
-  /v1/memories/{id}:
-    delete:
-      tags: [Memories]
-      operationId: deleteMemory
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: Deleted. } }
-
-  /v1/plugins:
-    get: { tags: [Plugins], operationId: listPlugins, responses: { "200": { description: Plugins. } } }
-  /v1/plugins/registry:
-    get: { tags: [Plugins], operationId: listRegistry, responses: { "200": { description: Registry. } } }
-  /v1/plugins/registry/{id}:
-    get:
-      tags: [Plugins]
-      operationId: registryDetail
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: Registry entry. } }
-  /v1/plugins/installed:
-    get: { tags: [Plugins], operationId: listInstalled, responses: { "200": { description: Installed. } } }
-  /v1/plugins/install:
-    post:
-      tags: [Plugins]
-      operationId: installPlugin
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [plugin_name]
-              properties:
-                plugin_name: { type: string }
-                permissions: { type: array, items: { type: string } }
-                secrets: { type: object, additionalProperties: { type: string } }
-      responses: { "200": { description: Installed. } }
-  /v1/plugins/uninstall:
-    post:
-      tags: [Plugins]
-      operationId: uninstallPlugin
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [plugin_name]
-              properties:
-                plugin_name: { type: string }
-      responses: { "200": { description: Uninstalled. } }
-
-  /v1/sessions/{id}/tasks:
-    get:
-      tags: [ProjectManagement]
-      operationId: listTasks
-      summary: List the full kanban board for a session.
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-        - { name: project_id, in: query, required: false, schema: { type: string } }
-      responses: { "200": { description: Board (tasks + projects + deps). } }
-    post:
-      tags: [ProjectManagement]
-      operationId: createTask
-      summary: Create a task.
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [title]
-              properties:
-                title: { type: string }
-                description: { type: string }
-                projectId: { type: string }
-                parentTaskId: { type: string }
-                status: { type: string }
-                priority: { type: string }
-                labels: { type: array, items: { type: string } }
-      responses:
-        "201":
-          description: Created.
+                $ref: '#/components/schemas/SessionPromptResponse'
+        '400':
+          description: Invalid request.
           content:
             application/json:
               schema:
-                type: object
-                properties: { taskId: { type: string } }
-
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/sessions/{id}/projects:
+    get:
+      tags:
+      - ProjectManagement
+      summary: List the projects for a session.
+      operationId: listProjects
+      parameters:
+      - name: id
+        in: path
+        description: Session id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Projects.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    post:
+      tags:
+      - ProjectManagement
+      summary: Create a project.
+      operationId: createProject
+      parameters:
+      - name: id
+        in: path
+        description: Session id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProjectRequest'
+        required: true
+      responses:
+        '201':
+          description: Created `{projectId}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/sessions/{id}/projects/{project_id}:
+    delete:
+      tags:
+      - ProjectManagement
+      summary: Delete a project.
+      operationId: deleteProject
+      parameters:
+      - name: id
+        in: path
+        description: Session id.
+        required: true
+        schema:
+          type: string
+      - name: project_id
+        in: path
+        description: Project id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Deleted `{deleted}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    patch:
+      tags:
+      - ProjectManagement
+      summary: Update a project.
+      operationId: updateProject
+      parameters:
+      - name: id
+        in: path
+        description: Session id.
+        required: true
+        schema:
+          type: string
+      - name: project_id
+        in: path
+        description: Project id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: '`{name?, description?, archived?}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '200':
+          description: Updated `{ok}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/sessions/{id}/resume:
+    post:
+      tags:
+      - Sessions
+      summary: Resume a session with its history.
+      description: |-
+        Reconstructs the conversation from the durable chat-store: the message
+        history plus tool-call records, interleaved by `created_at` on the client.
+      operationId: resumeSession
+      parameters:
+      - name: id
+        in: path
+        description: Session id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Reconstructed conversation `{messages, tool_calls}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/sessions/{id}/tasks:
+    get:
+      tags:
+      - ProjectManagement
+      summary: List the full kanban board for a session.
+      operationId: listTasks
+      parameters:
+      - name: id
+        in: path
+        description: Session id.
+        required: true
+        schema:
+          type: string
+      - name: project_id
+        in: query
+        description: Filter to one project.
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Board (tasks + projects + deps).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    post:
+      tags:
+      - ProjectManagement
+      summary: Create a task.
+      operationId: createTask
+      parameters:
+      - name: id
+        in: path
+        description: Session id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTaskRequest'
+        required: true
+      responses:
+        '201':
+          description: Created `{taskId}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
   /v1/sessions/{id}/tasks/{task_id}:
     get:
-      tags: [ProjectManagement]
+      tags:
+      - ProjectManagement
+      summary: Get one task with subtasks and dependency edges.
       operationId: getTask
-      summary: Get one task with its subtasks and dependency edges.
       parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-        - { name: task_id, in: path, required: true, schema: { type: string } }
+      - name: id
+        in: path
+        description: Session id.
+        required: true
+        schema:
+          type: string
+      - name: task_id
+        in: path
+        description: Task id.
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
+        '200':
           description: Task + subtasks + dependency edges.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  task: { type: [object, "null"], additionalProperties: true }
-                  subtasks: { type: array, items: { type: object, additionalProperties: true } }
-                  blocks: { type: array, items: { type: string } }
-                  blockedBy: { type: array, items: { type: string } }
-        "404": { $ref: "#/components/responses/LegacyError" }
-    patch:
-      tags: [ProjectManagement]
-      operationId: updateTask
-      summary: Partially update a task.
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-        - { name: task_id, in: path, required: true, schema: { type: string } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                title: { type: string }
-                description: { type: string }
-                status: { type: string }
-                priority: { type: string }
-                labels: { type: array, items: { type: string } }
-                projectId: { type: string }
-      responses:
-        "200":
-          description: Updated.
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
           content:
             application/json:
               schema:
-                type: object
-                properties: { ok: { type: boolean } }
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
     delete:
-      tags: [ProjectManagement]
-      operationId: deleteTask
+      tags:
+      - ProjectManagement
       summary: Delete a task.
+      operationId: deleteTask
       parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-        - { name: task_id, in: path, required: true, schema: { type: string } }
+      - name: id
+        in: path
+        description: Session id.
+        required: true
+        schema:
+          type: string
+      - name: task_id
+        in: path
+        description: Task id.
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
-          description: Deleted.
+        '200':
+          description: Deleted `{deleted}`.
           content:
             application/json:
               schema:
-                type: object
-                properties: { deleted: { type: boolean } }
-
-  /v1/sessions/{id}/tasks/{task_id}/move:
-    post:
-      tags: [ProjectManagement]
-      operationId: moveTask
-      summary: Move a task between columns / reorder it.
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    patch:
+      tags:
+      - ProjectManagement
+      summary: Partially update a task.
+      operationId: updateTask
       parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-        - { name: task_id, in: path, required: true, schema: { type: string } }
-      requestBody:
+      - name: id
+        in: path
+        description: Session id.
         required: true
+        schema:
+          type: string
+      - name: task_id
+        in: path
+        description: Task id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: Partial task fields.
         content:
           application/json:
             schema:
-              type: object
-              required: [status]
-              properties:
-                status: { type: string }
-                sortOrder: { type: number }
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
       responses:
-        "200":
-          description: Moved.
+        '200':
+          description: Updated `{ok}`.
           content:
             application/json:
               schema:
-                type: object
-                properties: { ok: { type: boolean } }
-
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
   /v1/sessions/{id}/tasks/{task_id}/checklist:
     put:
-      tags: [ProjectManagement]
-      operationId: setChecklist
+      tags:
+      - ProjectManagement
       summary: Replace a task's checklist.
+      operationId: setChecklist
       parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-        - { name: task_id, in: path, required: true, schema: { type: string } }
-      requestBody:
+      - name: id
+        in: path
+        description: Session id.
         required: true
+        schema:
+          type: string
+      - name: task_id
+        in: path
+        description: Task id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: '`{checklist}`'
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                checklist:
-                  type: array
-                  items: { type: object, additionalProperties: true }
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
       responses:
-        "200":
-          description: Checklist replaced.
+        '200':
+          description: Checklist replaced `{ok}`.
           content:
             application/json:
               schema:
-                type: object
-                properties: { ok: { type: boolean } }
-
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
   /v1/sessions/{id}/tasks/{task_id}/deps:
     post:
-      tags: [ProjectManagement]
-      operationId: addDependency
+      tags:
+      - ProjectManagement
       summary: Add a "blocks" dependency edge from this task.
+      operationId: addDependency
       parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-        - { name: task_id, in: path, required: true, schema: { type: string } }
-      requestBody:
+      - name: id
+        in: path
+        description: Session id.
         required: true
+        schema:
+          type: string
+      - name: task_id
+        in: path
+        description: Task id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: '`{blocksTaskId}`'
         content:
           application/json:
             schema:
-              type: object
-              required: [blocksTaskId]
-              properties:
-                blocksTaskId: { type: string }
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
       responses:
-        "200":
-          description: Dependency added.
+        '200':
+          description: Dependency added `{ok}`.
           content:
             application/json:
               schema:
-                type: object
-                properties: { ok: { type: boolean } }
-
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
   /v1/sessions/{id}/tasks/{task_id}/deps/{blocks_task_id}:
     delete:
-      tags: [ProjectManagement]
-      operationId: removeDependency
+      tags:
+      - ProjectManagement
       summary: Remove a dependency edge (blocker is a path param).
+      operationId: removeDependency
       parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-        - { name: task_id, in: path, required: true, schema: { type: string } }
-        - { name: blocks_task_id, in: path, required: true, schema: { type: string } }
+      - name: id
+        in: path
+        description: Session id.
+        required: true
+        schema:
+          type: string
+      - name: task_id
+        in: path
+        description: Task id.
+        required: true
+        schema:
+          type: string
+      - name: blocks_task_id
+        in: path
+        description: The blocked task id.
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
-          description: Dependency removed.
+        '200':
+          description: Dependency removed `{ok}`.
           content:
             application/json:
               schema:
-                type: object
-                properties: { ok: { type: boolean } }
-
-  /v1/sessions/{id}/projects:
-    get:
-      tags: [ProjectManagement]
-      operationId: listProjects
-      summary: List the projects for a session.
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: Projects. } }
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/sessions/{id}/tasks/{task_id}/move:
     post:
-      tags: [ProjectManagement]
-      operationId: createProject
-      summary: Create a project.
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      requestBody:
+      tags:
+      - ProjectManagement
+      summary: Move a task between columns / reorder it.
+      operationId: moveTask
+      parameters:
+      - name: id
+        in: path
+        description: Session id.
         required: true
+        schema:
+          type: string
+      - name: task_id
+        in: path
+        description: Task id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: '`{status, sortOrder?}`'
         content:
           application/json:
             schema:
-              type: object
-              required: [name]
-              properties:
-                name: { type: string }
-                description: { type: string }
-      responses:
-        "201":
-          description: Created.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: { projectId: { type: string } }
-
-  /v1/sessions/{id}/projects/{project_id}:
-    patch:
-      tags: [ProjectManagement]
-      operationId: updateProject
-      summary: Update a project.
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-        - { name: project_id, in: path, required: true, schema: { type: string } }
-      requestBody:
+              $ref: '#/components/schemas/FreeformObject'
         required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                name: { type: string }
-                description: { type: string }
-                archived: { type: boolean }
       responses:
-        "200":
-          description: Updated.
+        '200':
+          description: Moved `{ok}`.
           content:
             application/json:
               schema:
-                type: object
-                properties: { ok: { type: boolean } }
-    delete:
-      tags: [ProjectManagement]
-      operationId: deleteProject
-      summary: Delete a project.
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-        - { name: project_id, in: path, required: true, schema: { type: string } }
-      responses:
-        "200":
-          description: Deleted.
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
           content:
             application/json:
               schema:
-                type: object
-                properties: { deleted: { type: boolean } }
-
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
   /v1/sessions/{id}/todos:
     get:
-      tags: [ProjectManagement]
+      tags:
+      - ProjectManagement
+      summary: Read-only todo list for a session.
       operationId: getTodos
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: Todos (read-only). } }
-
-  /v1/schedules:
-    get: { tags: [ProjectManagement], operationId: listSchedules, responses: { "200": { description: Schedules. } } }
-    post:
-      tags: [ProjectManagement]
-      operationId: createSchedule
-      summary: Create a cron schedule.
-      requestBody:
+      parameters:
+      - name: id
+        in: path
+        description: Session id.
         required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [name, cronExpr, actionKind]
-              properties:
-                name: { type: string }
-                cronExpr: { type: string }
-                actionKind: { type: string }
-                actionPayload: { type: object, additionalProperties: true }
+        schema:
+          type: string
       responses:
-        "201":
-          description: Created.
+        '200':
+          description: Todos (read-only).
           content:
             application/json:
               schema:
-                type: object
-                properties: { taskId: { type: string } }
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/usage:
+    get:
+      tags:
+      - Account
+      summary: Get token usage for the current period.
+      description: |-
+        Scoped to the caller's account: a platform (API) key reports THAT platform
+        account's API usage (`platformAccountId` non-empty); a consumer session JWT
+        reports the consumer/subscription bucket (empty `platformAccountId`). Reads
+        the step-1 payments shape: top-level `totalRequests`/`totalTokens` (uint64
+        serialized as JSON strings) + per-model `models[]` (from which `by_model` is
+        derived).
+      operationId: getUsage
+      responses:
+        '200':
+          description: Usage.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenUsage'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/usage/dashboard:
+    get:
+      tags:
+      - Account
+      summary: Rich per-model usage view (included-vs-extra split + compute window).
+      description: |-
+        This re-homes the data the deleted fabric `InferenceService.GetInferenceUsage`
+        once carried, assembled from the surviving authorities:
+          - `plan` + `planIncludedTokens` ← payments `GetBilling` (`plan`) + core
+            `billing::plan_included_tokens_for`,
+          - `periodStart` ← core `billing::current_billing_period_start_ms`,
+          - `models[]` (per-tier included-vs-extra split + `extraSpendCents` +
+            `requestCount`) ← payments `GetTokenUsage`; `multiplier` ← core
+            `billing::model_multiplier`,
+          - `billing` block (extra-usage toggle/cap + credit balance + period spend)
+            ← payments `GetBillingPreferences`,
+          - `compute.session.current` (the 5h compute-session window) ← tally
+            `GetSession`, with the `state`/`usedMs`/`limitMs` derived from the row's
+            timers (the same derivation tally's `report_activity` UPSERT implies).
 
-  /v1/schedules/{task_id}:
-    patch:
-      tags: [ProjectManagement]
-      operationId: updateSchedule
-      summary: Update a cron schedule.
-      parameters: [{ name: task_id, in: path, required: true, schema: { type: string } }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                enabled: { type: boolean }
-                cronExpr: { type: string }
-      responses:
-        "200":
-          description: Updated.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: { updated: { type: boolean } }
-    delete:
-      tags: [ProjectManagement]
-      operationId: deleteSchedule
-      summary: Delete a cron schedule.
-      parameters: [{ name: task_id, in: path, required: true, schema: { type: string } }]
-      responses:
-        "200":
-          description: Deleted.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: { deleted: { type: boolean } }
+        Individual-user scope (`authenticate_v1_user`): a logged-in consumer session,
+        no platform-account requirement. The caller's `x-user-id` (verified JWT sub)
+        is forced onto every downstream — never a client header. Each sub-section
+        degrades independently: a payments / tally outage leaves that block at its
+        zero-value default rather than failing the whole panel, so the dashboard
+        always renders.
 
+        **Omitted vs the old fabric shape:** `compute.session.current.inFlight` is
+        always `0` — the in-flight chat count lived in fabric's in-process
+        `InferenceService` state, which no longer exists; tally's durable session row
+        carries only the window timers. The panel reads `inFlight` solely for a
+        cosmetic "Mid-turn" badge, so `0` degrades it to "Active" without breaking.
+      operationId: getUsageDashboard
+      responses:
+        '200':
+          description: Usage dashboard.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageDashboard'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
   /v1/workflows:
-    get: { tags: [ProjectManagement], operationId: listWorkflows, responses: { "200": { description: Workflows. } } }
-    post:
-      tags: [ProjectManagement]
-      operationId: createWorkflow
-      summary: Create a workflow definition.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [name, source]
-              properties:
-                name: { type: string }
-                source: { type: string }
+    get:
+      tags:
+      - ProjectManagement
+      summary: List workflow definitions.
+      operationId: listWorkflows
       responses:
-        "201":
-          description: Created.
+        '200':
+          description: Workflows.
           content:
             application/json:
               schema:
-                type: object
-                properties: { workflowId: { type: string } }
-
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    post:
+      tags:
+      - ProjectManagement
+      summary: Create a workflow definition.
+      operationId: createWorkflow
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkflowRequest'
+        required: true
+      responses:
+        '201':
+          description: Created `{workflowId}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
   /v1/workflows/lint:
     post:
-      tags: [ProjectManagement]
-      operationId: lintWorkflow
+      tags:
+      - ProjectManagement
       summary: Compile-check a workflow source.
+      operationId: lintWorkflow
       requestBody:
+        description: '`{source}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
         required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [source]
-              properties:
-                source: { type: string }
       responses:
-        "200":
-          description: Lint result.
+        '200':
+          description: Lint result `{ok, errors}`.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  ok: { type: boolean }
-                  errors: { type: array, items: { type: string } }
-
-  /v1/workflows/{workflow_id}:
-    get:
-      tags: [ProjectManagement]
-      operationId: getWorkflow
-      summary: Get one workflow definition (with source).
-      parameters: [{ name: workflow_id, in: path, required: true, schema: { type: string } }]
-      responses:
-        "200":
-          description: Workflow definition.
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  workflowId: { type: string }
-                  name: { type: string }
-                  source: { type: string }
-                  compileStatus: { type: string }
-                  enabled: { type: boolean }
-                  createdAt: { type: [string, integer] }
-                  updatedAt: { type: [string, integer] }
-        "404": { $ref: "#/components/responses/LegacyError" }
-    patch:
-      tags: [ProjectManagement]
-      operationId: updateWorkflow
-      summary: Update a workflow definition.
-      parameters: [{ name: workflow_id, in: path, required: true, schema: { type: string } }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                name: { type: string }
-                source: { type: string }
-                enabled: { type: boolean }
-      responses:
-        "200":
-          description: Updated.
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
           content:
             application/json:
               schema:
-                type: object
-                properties: { ok: { type: boolean } }
-    delete:
-      tags: [ProjectManagement]
-      operationId: deleteWorkflow
-      summary: Delete a workflow definition.
-      parameters: [{ name: workflow_id, in: path, required: true, schema: { type: string } }]
-      responses:
-        "200":
-          description: Deleted.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: { deleted: { type: boolean } }
-
-  /v1/workflows/{workflow_id}/run:
-    post:
-      tags: [ProjectManagement]
-      operationId: runWorkflow
-      summary: Run a workflow.
-      parameters: [{ name: workflow_id, in: path, required: true, schema: { type: string } }]
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                input: { type: object, additionalProperties: true }
-                trigger: { type: string }
-      responses:
-        "200":
-          description: Run started.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  runId: { type: string }
-                  status: { type: string }
-
+                $ref: '#/components/schemas/LegacyError'
   /v1/workflows/runs/{run_id}:
     get:
-      tags: [ProjectManagement]
-      operationId: getWorkflowRun
+      tags:
+      - ProjectManagement
       summary: Get a workflow run's status, events, and output.
-      parameters: [{ name: run_id, in: path, required: true, schema: { type: string } }]
+      operationId: getWorkflowRun
+      parameters:
+      - name: run_id
+        in: path
+        description: Run id.
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
+        '200':
           description: Run status + events + output.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  runId: { type: string }
-                  status: { type: string }
-                  startedAt: { type: [string, integer, "null"] }
-                  completedAt: { type: [string, integer, "null"] }
-                  output: { type: [object, array, "null"], additionalProperties: true }
-                  error: { type: [string, "null"] }
-                  events:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        seq: { type: integer }
-                        ts: { type: [string, integer] }
-                        level: { type: string }
-                        message: { type: string }
-        "404": { $ref: "#/components/responses/LegacyError" }
-
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
   /v1/workflows/runs/{run_id}/cancel:
     post:
-      tags: [ProjectManagement]
-      operationId: cancelWorkflowRun
+      tags:
+      - ProjectManagement
       summary: Cancel a running workflow.
-      parameters: [{ name: run_id, in: path, required: true, schema: { type: string } }]
+      operationId: cancelWorkflowRun
+      parameters:
+      - name: run_id
+        in: path
+        description: Run id.
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
-          description: Cancelled.
+        '200':
+          description: Cancelled `{cancelled}`.
           content:
             application/json:
               schema:
-                type: object
-                properties: { cancelled: { type: boolean } }
-
-  /v1/flags:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/workflows/{workflow_id}:
     get:
-      tags: [Flags]
-      operationId: getFlags
-      summary: Feature flags enabled for the caller.
+      tags:
+      - ProjectManagement
+      summary: Get one workflow definition (with source).
+      operationId: getWorkflow
+      parameters:
+      - name: workflow_id
+        in: path
+        description: Workflow id.
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
-          description: Flags.
+        '200':
+          description: Workflow definition.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  flags:
-                    type: object
-                    additionalProperties: { type: boolean }
-
+                $ref: '#/components/schemas/Workflow'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    delete:
+      tags:
+      - ProjectManagement
+      summary: Delete a workflow definition.
+      operationId: deleteWorkflow
+      parameters:
+      - name: workflow_id
+        in: path
+        description: Workflow id.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Deleted `{deleted}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    patch:
+      tags:
+      - ProjectManagement
+      summary: Update a workflow definition.
+      operationId: updateWorkflow
+      parameters:
+      - name: workflow_id
+        in: path
+        description: Workflow id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: '`{name?, source?, enabled?}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '200':
+          description: Updated `{ok}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/workflows/{workflow_id}/run:
+    post:
+      tags:
+      - ProjectManagement
+      summary: Run a workflow.
+      operationId: runWorkflow
+      parameters:
+      - name: workflow_id
+        in: path
+        description: Workflow id.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: '`{input?, trigger?}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '200':
+          description: Run started `{runId, status}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
 components:
-  securitySchemes:
-    ApiKeyHeader:
-      type: apiKey
-      in: header
-      name: x-api-key
-    BearerAuth:
-      type: http
-      scheme: bearer
-  parameters:
-    AnthropicVersion:
-      name: anthropic-version
-      in: header
-      required: false
-      schema: { type: string, default: "2026-06-01" }
-  headers:
-    RequestId:
-      description: Unique request id (`req_…`).
-      schema: { type: string }
-    RateLimitLimit:
-      description: Per-window request budget.
-      schema: { type: integer }
-    RateLimitRemaining:
-      description: Requests remaining in the window.
-      schema: { type: integer }
-    RateLimitReset:
-      description: RFC 3339 UTC time the window resets.
-      schema: { type: string, format: date-time }
-  responses:
-    AnthropicError:
-      description: Anthropic-shaped error.
-      headers:
-        request-id: { $ref: "#/components/headers/RequestId" }
-        retry-after:
-          description: Seconds to wait before retrying (on 429).
-          schema: { type: integer }
-      content:
-        application/json:
-          schema: { $ref: "#/components/schemas/AnthropicError" }
-    LegacyError:
-      description: Legacy-shaped error (platform surfaces).
-      content:
-        application/json:
-          schema: { $ref: "#/components/schemas/LegacyError" }
   schemas:
-    CreateMessageRequest:
+    Account:
       type: object
-      required: [model, messages, max_tokens]
+      description: '`GET /v1/account`.'
+      required:
+      - id
+      - user_id
+      - plan
       properties:
-        model: { type: string, examples: ["zoysia"] }
-        messages:
-          type: array
-          items: { $ref: "#/components/schemas/InputMessage" }
-        max_tokens: { type: integer, minimum: 1 }
-        system:
-          oneOf:
-            - { type: string }
-            - { type: array, items: { $ref: "#/components/schemas/TextBlock" } }
-        temperature: { type: number, minimum: 0, maximum: 1 }
-        top_p: { type: number, minimum: 0, maximum: 1 }
-        top_k: { type: integer }
-        stop_sequences: { type: array, items: { type: string } }
-        stream: { type: boolean, default: false }
-        tools:
-          type: array
-          items: { $ref: "#/components/schemas/Tool" }
-        tool_choice: { $ref: "#/components/schemas/ToolChoice" }
+        id:
+          type: string
+          example: pa_123
+        plan:
+          type: string
+        user_id:
+          type: string
+    AddMemoryRequest:
+      type: object
+      description: '`POST /v1/memories` request body.'
+      required:
+      - text
+      properties:
         metadata:
+          type:
+          - object
+          - 'null'
+          description: Opaque string key/value metadata stored with the memory.
+        text:
+          type: string
+    Agent:
+      type: object
+      description: One subagent run record.
+      required:
+      - id
+      - description
+      - status
+      - started_at
+      - completed_at
+      - duration_ms
+      - turns
+      - input_tokens
+      - output_tokens
+      properties:
+        completed_at:
           type: object
-          properties: { user_id: { type: string } }
+        description:
+          type: string
+        duration_ms:
+          type: integer
+          format: int64
+        error:
+          type:
+          - string
+          - 'null'
+        id:
+          type: string
+        input_tokens:
+          type: integer
+          format: int64
+        output_tokens:
+          type: integer
+          format: int64
+        started_at:
+          type: object
+        status:
+          type: string
+        turns:
+          type: integer
+          format: int64
+    AgentList:
+      type: object
+      description: '`GET /v1/agents` → subagent run history.'
+      required:
+      - agents
+      properties:
+        agents:
+          type: array
+          items:
+            $ref: '#/components/schemas/Agent'
+    AnthropicError:
+      type: object
+      description: The Anthropic error envelope (Messages / Models surfaces).
+      required:
+      - type
+      - error
+      properties:
+        error:
+          $ref: '#/components/schemas/AnthropicErrorBody'
+        request_id:
+          type:
+          - string
+          - 'null'
+        type:
+          type: string
+          description: Always `"error"`.
+    AnthropicErrorBody:
+      type: object
+      description: The `error` member of an [`AnthropicError`].
+      required:
+      - type
+      - message
+      properties:
+        message:
+          type: string
+        type:
+          type: string
+          description: |-
+            `invalid_request_error` | `authentication_error` | `permission_error` |
+            `not_found_error` | `request_too_large` | `rate_limit_error` |
+            `api_error` | `overloaded_error`.
+    Billing:
+      type: object
+      description: '`GET /v1/billing`.'
+      required:
+      - plan
+      - status
+      - limits
+      - current_usage
+      properties:
+        current_usage:
+          type: object
+        limits:
+          type: object
+        plan:
+          type: string
+        status:
+          type: string
     CountTokensRequest:
       type: object
-      required: [model, messages]
+      description: |-
+        `POST /v1/messages/count_tokens` request body (same as messages minus
+        `max_tokens` / `stream`).
+      required:
+      - model
+      - messages
       properties:
-        model: { type: string }
         messages:
           type: array
-          items: { $ref: "#/components/schemas/InputMessage" }
+          items:
+            $ref: '#/components/schemas/InputMessage'
+        model:
+          type: string
         system:
-          oneOf:
-            - { type: string }
-            - { type: array, items: { $ref: "#/components/schemas/TextBlock" } }
+          type:
+          - object
+          - 'null'
         tools:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/Tool'
+    CountTokensResponse:
+      type: object
+      description: '`POST /v1/messages/count_tokens` response.'
+      required:
+      - input_tokens
+      properties:
+        input_tokens:
+          type: integer
+          format: int64
+    CreateMessageRequest:
+      type: object
+      description: '`POST /v1/messages` request body.'
+      required:
+      - model
+      - messages
+      - max_tokens
+      properties:
+        max_tokens:
+          type: integer
+          format: int64
+          description: Max tokens to generate (> 0).
+          example: 1024
+          minimum: 1
+        messages:
           type: array
-          items: { $ref: "#/components/schemas/Tool" }
-    InputMessage:
-      type: object
-      required: [role, content]
-      properties:
-        role: { type: string, enum: [user, assistant] }
-        content:
+          items:
+            $ref: '#/components/schemas/InputMessage'
+          description: Non-empty conversation turns.
+        metadata:
+          type:
+          - object
+          - 'null'
+          description: Opaque metadata (e.g. `{user_id}`); accepted and ignored.
+        model:
+          type: string
+          description: '`"rye"` or `"zoysia"`.'
+          example: zoysia
+        stop_sequences:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+        stream:
+          type:
+          - boolean
+          - 'null'
+          description: Stream the response as named SSE events. Default `false`.
+        system:
+          type:
+          - object
+          - 'null'
+          description: System prompt (string or `TextBlock[]`).
+        temperature:
+          type:
+          - number
+          - 'null'
+          format: double
+          maximum: 1
+          minimum: 0
+        tool_choice:
           oneOf:
-            - { type: string }
-            - { type: array, items: { $ref: "#/components/schemas/InputContentBlock" } }
-    InputContentBlock:
-      oneOf:
-        - { $ref: "#/components/schemas/TextBlock" }
-        - { $ref: "#/components/schemas/ImageBlock" }
-        - { $ref: "#/components/schemas/ToolUseBlock" }
-        - { $ref: "#/components/schemas/ToolResultBlock" }
-      discriminator: { propertyName: type }
-    TextBlock:
+          - type: 'null'
+          - $ref: '#/components/schemas/ToolChoice'
+        tools:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/Tool'
+        top_k:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        top_p:
+          type:
+          - number
+          - 'null'
+          format: double
+          maximum: 1
+          minimum: 0
+    CreateProjectRequest:
       type: object
-      required: [type, text]
+      description: '`POST /v1/sessions/{id}/projects` request body.'
+      required:
+      - name
       properties:
-        type: { type: string, const: text }
-        text: { type: string }
+        description:
+          type:
+          - string
+          - 'null'
+        name:
+          type: string
+    CreateScheduleRequest:
+      type: object
+      description: '`POST /v1/schedules` request body.'
+      required:
+      - name
+      - cron_expr
+      - action_kind
+      properties:
+        action_kind:
+          type: string
+        action_payload:
+          type:
+          - object
+          - 'null'
+        cron_expr:
+          type: string
+        name:
+          type: string
+    CreateTaskRequest:
+      type: object
+      description: '`POST /v1/sessions/{id}/tasks` request body.'
+      required:
+      - title
+      properties:
+        description:
+          type:
+          - string
+          - 'null'
+        labels:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+        parent_task_id:
+          type:
+          - string
+          - 'null'
+        priority:
+          type:
+          - string
+          - 'null'
+        project_id:
+          type:
+          - string
+          - 'null'
+        status:
+          type:
+          - string
+          - 'null'
+        title:
+          type: string
+    CreateWorkflowRequest:
+      type: object
+      description: '`POST /v1/workflows` request body.'
+      required:
+      - name
+      - source
+      properties:
+        name:
+          type: string
+        source:
+          type: string
+    FlagsResponse:
+      type: object
+      description: '`GET /v1/flags` → `{flags: {flag: bool}}`.'
+      required:
+      - flags
+      properties:
+        flags:
+          type: object
+          description: '`{flag: enabled}`.'
+    FreeformObject:
+      type: object
+      description: |-
+        A free-form JSON object (renders as `type: object` with no fixed schema).
+        Used for bodies the hand-authored contract leaves untyped (PM internals,
+        nested billing/usage detail, workflow run output).
     ImageBlock:
       type: object
-      required: [type, source]
+      description: '`{"type":"image","source":{...}}`'
+      required:
+      - source
       properties:
-        type: { type: string, const: image }
         source:
-          type: object
-          required: [type, media_type, data]
-          properties:
-            type: { type: string, const: base64 }
-            media_type: { type: string, enum: [image/jpeg, image/png, image/gif, image/webp] }
-            data: { type: string }
-    ToolUseBlock:
+          $ref: '#/components/schemas/ImageSource'
+    ImageSource:
       type: object
-      required: [type, id, name, input]
+      description: A base64 image source.
+      required:
+      - type
+      - media_type
+      - data
       properties:
-        type: { type: string, const: tool_use }
-        id: { type: string }
-        name: { type: string }
-        input: { type: object, additionalProperties: true }
-    ToolResultBlock:
-      type: object
-      required: [type, tool_use_id]
-      properties:
-        type: { type: string, const: tool_result }
-        tool_use_id: { type: string }
-        content:
-          oneOf:
-            - { type: string }
-            - { type: array, items: { $ref: "#/components/schemas/TextBlock" } }
-        is_error: { type: boolean }
-    Tool:
-      type: object
-      required: [name, input_schema]
-      properties:
-        name: { type: string }
-        description: { type: string }
-        input_schema: { type: object, additionalProperties: true }
-    ToolChoice:
-      type: object
-      required: [type]
-      properties:
-        type: { type: string, enum: [auto, any, tool, none] }
-        name: { type: string }
-    Message:
-      type: object
-      required: [id, type, role, model, content, stop_reason, usage]
-      properties:
-        id: { type: string, examples: ["msg_013Zva2CMHLNnXjNJJKqJ2EF"] }
-        type: { type: string, const: message }
-        role: { type: string, const: assistant }
-        model: { type: string }
-        content:
-          type: array
-          items: { $ref: "#/components/schemas/OutputContentBlock" }
-        stop_reason:
-          type: [string, "null"]
-          enum: [end_turn, max_tokens, stop_sequence, tool_use, null]
-        stop_sequence: { type: [string, "null"] }
-        usage: { $ref: "#/components/schemas/Usage" }
-    OutputContentBlock:
+        data:
+          type: string
+          description: Base64-encoded image bytes.
+        media_type:
+          type: string
+          description: e.g. `"image/png"`.
+        type:
+          type: string
+          description: Always `"base64"`.
+          example: base64
+    InputContentBlock:
       oneOf:
-        - { $ref: "#/components/schemas/TextBlock" }
-        - { $ref: "#/components/schemas/ToolUseBlock" }
-      discriminator: { propertyName: type }
-    Usage:
-      type: object
-      required: [input_tokens, output_tokens]
-      properties:
-        input_tokens: { type: integer }
-        output_tokens: { type: integer }
-    SessionUsage:
-      type: object
-      description: Anthropic-style token usage (no total_tokens — compute client-side).
-      properties:
-        input_tokens: { type: integer }
-        output_tokens: { type: integer }
-    Model:
-      type: object
-      required: [id, type, display_name, created_at]
-      properties:
-        id: { type: string }
-        type: { type: string, const: model }
-        display_name: { type: string }
-        created_at: { type: string, format: date-time }
-        max_input_tokens: { type: integer }
-        max_tokens: { type: integer }
-    ModelList:
-      type: object
-      required: [data, has_more]
-      properties:
-        data: { type: array, items: { $ref: "#/components/schemas/Model" } }
-        has_more: { type: boolean }
-        first_id: { type: [string, "null"] }
-        last_id: { type: [string, "null"] }
-    Session:
-      type: object
-      properties:
-        id: { type: string }
-        model: { type: [string, "null"] }
-        title: { type: string }
-        status: { type: string }
-        message_count: { type: integer }
-        created_at: { type: string }
-        updated_at: { type: string }
-    AnthropicError:
-      type: object
-      required: [type, error]
-      properties:
-        type: { type: string, const: error }
-        request_id: { type: string }
-        error:
-          type: object
-          required: [type, message]
+      - allOf:
+        - $ref: '#/components/schemas/TextBlock'
+        - type: object
+          required:
+          - type
           properties:
             type:
               type: string
               enum:
-                - invalid_request_error
-                - authentication_error
-                - permission_error
-                - not_found_error
-                - request_too_large
-                - rate_limit_error
-                - api_error
-                - overloaded_error
-            message: { type: string }
+              - text
+      - allOf:
+        - $ref: '#/components/schemas/ImageBlock'
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - image
+      - allOf:
+        - $ref: '#/components/schemas/ToolUseBlock'
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - tool_use
+      - allOf:
+        - $ref: '#/components/schemas/ToolResultBlock'
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - tool_result
+      - allOf:
+        - $ref: '#/components/schemas/ThinkingBlock'
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - thinking
+      description: An input content block (discriminated on `type`).
+    InputMessage:
+      type: object
+      description: One input conversation turn.
+      required:
+      - role
+      - content
+      properties:
+        content:
+          type: object
+          description: A string OR an array of [`InputContentBlock`].
+        role:
+          type: string
+          description: '`"user"` or `"assistant"`.'
     LegacyError:
       type: object
-      required: [error]
+      description: The legacy error envelope (platform / dashboard surfaces).
+      required:
+      - error
       properties:
         error:
-          type: object
-          required: [code, message]
-          properties:
-            code: { type: string }
-            message: { type: string }
-    AddMemoryRequest:
+          $ref: '#/components/schemas/LegacyErrorBody'
+    LegacyErrorBody:
       type: object
-      required: [text]
+      description: The `error` member of a [`LegacyError`].
+      required:
+      - code
+      - message
       properties:
-        text: { type: string }
+        code:
+          type: string
+        message:
+          type: string
+    Memory:
+      type: object
+      description: A memory entry.
+      required:
+      - id
+      - text
+      - metadata
+      - created_at
+      properties:
+        created_at:
+          type: string
+        id:
+          type: string
         metadata:
           type: object
-          description: Opaque string key/value metadata stored with the memory.
-          additionalProperties: { type: string }
+          description: Opaque string key/value metadata.
+        score:
+          type:
+          - number
+          - 'null'
+          format: double
+        text:
+          type: string
+    MemoryList:
+      type: object
+      description: '`GET /v1/memories`.'
+      required:
+      - memories
+      properties:
+        memories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Memory'
+    MemoryStats:
+      type: object
+      description: '`GET /v1/memories/stats`.'
+      required:
+      - count
+      - last_added_at
+      properties:
+        count:
+          type: integer
+          format: int64
+        last_added_at:
+          type: string
+    Message:
+      type: object
+      description: The Anthropic `Message` object (buffered, non-stream response).
+      required:
+      - id
+      - type
+      - role
+      - model
+      - content
+      - usage
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/OutputContentBlock'
+        id:
+          type: string
+          example: msg_013Zva2CMHLNnXjNJJKqJ2EF
+        model:
+          type: string
+        role:
+          type: string
+          description: Always `"assistant"`.
+        stop_reason:
+          type:
+          - string
+          - 'null'
+          description: '`end_turn` | `max_tokens` | `stop_sequence` | `tool_use` | null.'
+        stop_sequence:
+          type:
+          - string
+          - 'null'
+        type:
+          type: string
+          description: Always `"message"`.
+        usage:
+          $ref: '#/components/schemas/Usage'
+    Model:
+      type: object
+      description: An Anthropic-shaped `Model` object.
+      required:
+      - id
+      - type
+      - display_name
+      - created_at
+      properties:
+        created_at:
+          type: string
+        display_name:
+          type: string
+        id:
+          type: string
+        max_input_tokens:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        max_tokens:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        type:
+          type: string
+          description: Always `"model"`.
+    ModelList:
+      type: object
+      description: |-
+        `GET /v1/models` page. Carries the Anthropic `data`/cursor shape plus the
+        legacy console fields (`models` / `acp_providers`).
+      required:
+      - data
+      - has_more
+      - models
+      - acp_providers
+      properties:
+        acp_providers:
+          type: array
+          items:
+            type: object
+          description: Legacy console ACP provider rows (additive).
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Model'
+        first_id:
+          type:
+          - string
+          - 'null'
+        has_more:
+          type: boolean
+        last_id:
+          type:
+          - string
+          - 'null'
+        models:
+          type: array
+          items:
+            type: object
+          description: Legacy console model rows (additive).
+    OutputContentBlock:
+      oneOf:
+      - allOf:
+        - $ref: '#/components/schemas/TextBlock'
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - text
+      - allOf:
+        - $ref: '#/components/schemas/ToolUseBlock'
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - tool_use
+      description: An output content block on a `Message` (text or tool_use).
+    Plugin:
+      type: object
+      description: A plugin entry.
+      required:
+      - name
+      - kind
+      - status
+      properties:
+        config_keys:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+        configurable:
+          type:
+          - boolean
+          - 'null'
+        error:
+          type:
+          - string
+          - 'null'
+        kind:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+    Project:
+      type: object
+      description: A PM project.
+      required:
+      - project_id
+      - name
+      - archived
+      - created_at
+      - updated_at
+      properties:
+        archived:
+          type: boolean
+        created_at:
+          type: string
+        description:
+          type:
+          - string
+          - 'null'
+        name:
+          type: string
+        project_id:
+          type: string
+        updated_at:
+          type: string
+    Schedule:
+      type: object
+      description: A cron schedule.
+      required:
+      - task_id
+      - name
+      - cron_expr
+      - action_kind
+      - action_payload
+      - enabled
+      - created_at
+      - updated_at
+      properties:
+        action_kind:
+          type: string
+        action_payload:
+          type: object
+        created_at:
+          type: string
+        cron_expr:
+          type: string
+        enabled:
+          type: boolean
+        last_run_at:
+          type:
+          - string
+          - 'null'
+        name:
+          type: string
+        next_run_at:
+          type:
+          - string
+          - 'null'
+        task_id:
+          type: string
+        updated_at:
+          type: string
+    Session:
+      type: object
+      description: An agentic session object.
+      required:
+      - id
+      - status
+      - created_at
+      properties:
+        created_at:
+          type: string
+        id:
+          type: string
+        message_count:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        model:
+          type:
+          - string
+          - 'null'
+        status:
+          type: string
+        title:
+          type:
+          - string
+          - 'null'
+        updated_at:
+          type:
+          - string
+          - 'null'
+    SessionPromptRequest:
+      type: object
+      description: '`POST /v1/sessions/{id}/messages` request body.'
+      required:
+      - content
+      properties:
+        content:
+          type: string
+        stream:
+          type:
+          - boolean
+          - 'null'
+    SessionPromptResponse:
+      type: object
+      description: '`POST /v1/sessions/{id}/messages` buffered response.'
+      required:
+      - message
+      - usage
+      properties:
+        message:
+          type: object
+        usage:
+          $ref: '#/components/schemas/SessionUsage'
+    SessionUsage:
+      type: object
+      description: Anthropic-style session token usage (no `total_tokens`).
+      required:
+      - input_tokens
+      - output_tokens
+      properties:
+        input_tokens:
+          type: integer
+          format: int64
+        output_tokens:
+          type: integer
+          format: int64
+    Task:
+      type: object
+      description: A kanban task card.
+      required:
+      - task_id
+      - title
+      - status
+      - labels
+      - checklist
+      - sort_order
+      - created_at
+      - updated_at
+      properties:
+        checklist:
+          type: object
+          description: Decoded checklist array.
+        created_at:
+          type: string
+        description:
+          type:
+          - string
+          - 'null'
+        labels:
+          type: object
+          description: Decoded labels array.
+        parent_task_id:
+          type:
+          - string
+          - 'null'
+        priority:
+          type:
+          - string
+          - 'null'
+        project_id:
+          type:
+          - string
+          - 'null'
+        sort_order:
+          type: number
+          format: double
+        status:
+          type: string
+        task_id:
+          type: string
+        title:
+          type: string
+        updated_at:
+          type: string
+    TextBlock:
+      type: object
+      description: '`{"type":"text","text":"..."}`'
+      required:
+      - text
+      properties:
+        text:
+          type: string
+    ThinkingBlock:
+      type: object
+      description: '`{"type":"thinking","thinking":"..."}` — echoed as plain context.'
+      required:
+      - thinking
+      properties:
+        thinking:
+          type: string
+    TokenUsage:
+      type: object
+      description: '`GET /v1/usage`.'
+      required:
+      - period
+      - requests
+      - tokens
+      - by_model
+      properties:
+        by_model:
+          type: object
+          description: '`{model: tokens}`.'
+        period:
+          type: string
+        requests:
+          type: integer
+          format: int64
+        tokens:
+          type: integer
+          format: int64
+    Tool:
+      type: object
+      description: A tool definition.
+      required:
+      - name
+      - input_schema
+      properties:
+        description:
+          type:
+          - string
+          - 'null'
+        input_schema:
+          type: object
+          description: JSON Schema for the tool input.
+        name:
+          type: string
+    ToolChoice:
+      type: object
+      description: The `tool_choice` directive.
+      required:
+      - type
+      properties:
+        name:
+          type:
+          - string
+          - 'null'
+        type:
+          type: string
+          description: '`auto` | `any` | `tool` | `none`.'
+    ToolResultBlock:
+      type: object
+      description: '`{"type":"tool_result","tool_use_id":"toolu_...","content":...,"is_error"?}`'
+      required:
+      - tool_use_id
+      properties:
+        content:
+          type:
+          - object
+          - 'null'
+          description: A string OR a `TextBlock[]`.
+        is_error:
+          type:
+          - boolean
+          - 'null'
+        tool_use_id:
+          type: string
+    ToolUseBlock:
+      type: object
+      description: '`{"type":"tool_use","id":"toolu_...","name":"...","input":{...}}`'
+      required:
+      - id
+      - name
+      - input
+      properties:
+        id:
+          type: string
+        input:
+          type: object
+        name:
+          type: string
+    Usage:
+      type: object
+      description: Token usage on a `Message`.
+      required:
+      - input_tokens
+      - output_tokens
+      properties:
+        input_tokens:
+          type: integer
+          format: int64
+        output_tokens:
+          type: integer
+          format: int64
+    UsageDashboard:
+      type: object
+      description: '`GET /v1/usage/dashboard`.'
+      required:
+      - plan
+      - period_start
+      - models
+      - billing
+      properties:
+        billing:
+          type: object
+          description: Extra-usage toggle/cap + credit balance + period spend.
+        compute:
+          type:
+          - object
+          - 'null'
+          description: The 5h compute-session window block (or `null`).
+        models:
+          type: array
+          items:
+            $ref: '#/components/schemas/UsageDashboardModel'
+        period_start:
+          type: integer
+          format: int64
+        plan:
+          type: string
+    UsageDashboardModel:
+      type: object
+      description: One per-model row of the usage dashboard.
+      required:
+      - model
+      - included_input_tokens
+      - included_output_tokens
+      - extra_input_tokens
+      - extra_output_tokens
+      - extra_spend_cents
+      - request_count
+      - multiplier
+      properties:
+        extra_input_tokens:
+          type: integer
+          format: int64
+        extra_output_tokens:
+          type: integer
+          format: int64
+        extra_spend_cents:
+          type: integer
+          format: int64
+        included_input_tokens:
+          type: integer
+          format: int64
+        included_output_tokens:
+          type: integer
+          format: int64
+        model:
+          type: string
+        multiplier:
+          type: number
+          format: double
+        request_count:
+          type: integer
+          format: int64
+    Workflow:
+      type: object
+      description: A workflow definition (with source).
+      required:
+      - workflow_id
+      - name
+      - compile_status
+      - enabled
+      - created_at
+      - updated_at
+      properties:
+        compile_status:
+          type: string
+        created_at:
+          type: string
+        enabled:
+          type: boolean
+        name:
+          type: string
+        source:
+          type:
+          - string
+          - 'null'
+        updated_at:
+          type: string
+        workflow_id:
+          type: string
+tags:
+- name: Messages
+  description: Anthropic-wire-compatible Messages API (flagship).
+- name: Models
+  description: Anthropic-shaped model catalog.
+- name: Account
+  description: Account / usage / billing (read) + agents.
+- name: Sessions
+  description: Agentic, model-driven session lifecycle + prompt loop.
+- name: Memories
+  description: User-scoped long-term memory store.
+- name: Plugins
+  description: Plugins / tools / marketplace.
+- name: ProjectManagement
+  description: Session-scoped kanban + user-scoped schedules / workflows.
+- name: Library
+  description: User research/knowledge library + binary artifacts.
+- name: Flags
+  description: Feature-flag discovery.
+- name: Meta
+  description: API metadata (the OpenAPI document itself).
