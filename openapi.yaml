@@ -342,7 +342,10 @@ paths:
       tags: [Memories]
       operationId: addMemory
       requestBody:
-        content: { application/json: { schema: { type: object } } }
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddMemoryRequest" }
       responses: { "200": { description: Created. } }
   /v1/memories/stats:
     get:
@@ -372,53 +375,558 @@ paths:
     post:
       tags: [Plugins]
       operationId: installPlugin
-      requestBody: { content: { application/json: { schema: { type: object } } } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plugin_name]
+              properties:
+                plugin_name: { type: string }
+                permissions: { type: array, items: { type: string } }
+                secrets: { type: object, additionalProperties: { type: string } }
       responses: { "200": { description: Installed. } }
   /v1/plugins/uninstall:
     post:
       tags: [Plugins]
       operationId: uninstallPlugin
-      requestBody: { content: { application/json: { schema: { type: object } } } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plugin_name]
+              properties:
+                plugin_name: { type: string }
       responses: { "200": { description: Uninstalled. } }
 
   /v1/sessions/{id}/tasks:
     get:
       tags: [ProjectManagement]
       operationId: listTasks
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: Tasks. } }
+      summary: List the full kanban board for a session.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: project_id, in: query, required: false, schema: { type: string } }
+      responses: { "200": { description: Board (tasks + projects + deps). } }
     post:
       tags: [ProjectManagement]
       operationId: createTask
+      summary: Create a task.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      requestBody: { content: { application/json: { schema: { type: object } } } }
-      responses: { "200": { description: Created. } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                description: { type: string }
+                projectId: { type: string }
+                parentTaskId: { type: string }
+                status: { type: string }
+                priority: { type: string }
+                labels: { type: array, items: { type: string } }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { taskId: { type: string } }
+
+  /v1/sessions/{id}/tasks/{task_id}:
+    get:
+      tags: [ProjectManagement]
+      operationId: getTask
+      summary: Get one task with its subtasks and dependency edges.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Task + subtasks + dependency edges.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task: { type: [object, "null"], additionalProperties: true }
+                  subtasks: { type: array, items: { type: object, additionalProperties: true } }
+                  blocks: { type: array, items: { type: string } }
+                  blockedBy: { type: array, items: { type: string } }
+        "404": { $ref: "#/components/responses/LegacyError" }
+    patch:
+      tags: [ProjectManagement]
+      operationId: updateTask
+      summary: Partially update a task.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                description: { type: string }
+                status: { type: string }
+                priority: { type: string }
+                labels: { type: array, items: { type: string } }
+                projectId: { type: string }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+    delete:
+      tags: [ProjectManagement]
+      operationId: deleteTask
+      summary: Delete a task.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { deleted: { type: boolean } }
+
+  /v1/sessions/{id}/tasks/{task_id}/move:
+    post:
+      tags: [ProjectManagement]
+      operationId: moveTask
+      summary: Move a task between columns / reorder it.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string }
+                sortOrder: { type: number }
+      responses:
+        "200":
+          description: Moved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+
+  /v1/sessions/{id}/tasks/{task_id}/checklist:
+    put:
+      tags: [ProjectManagement]
+      operationId: setChecklist
+      summary: Replace a task's checklist.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                checklist:
+                  type: array
+                  items: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Checklist replaced.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+
+  /v1/sessions/{id}/tasks/{task_id}/deps:
+    post:
+      tags: [ProjectManagement]
+      operationId: addDependency
+      summary: Add a "blocks" dependency edge from this task.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [blocksTaskId]
+              properties:
+                blocksTaskId: { type: string }
+      responses:
+        "200":
+          description: Dependency added.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+
+  /v1/sessions/{id}/tasks/{task_id}/deps/{blocks_task_id}:
+    delete:
+      tags: [ProjectManagement]
+      operationId: removeDependency
+      summary: Remove a dependency edge (blocker is a path param).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+        - { name: blocks_task_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Dependency removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+
   /v1/sessions/{id}/projects:
     get:
       tags: [ProjectManagement]
       operationId: listProjects
+      summary: List the projects for a session.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses: { "200": { description: Projects. } }
+    post:
+      tags: [ProjectManagement]
+      operationId: createProject
+      summary: Create a project.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                description: { type: string }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { projectId: { type: string } }
+
+  /v1/sessions/{id}/projects/{project_id}:
+    patch:
+      tags: [ProjectManagement]
+      operationId: updateProject
+      summary: Update a project.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: project_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                archived: { type: boolean }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+    delete:
+      tags: [ProjectManagement]
+      operationId: deleteProject
+      summary: Delete a project.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: project_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { deleted: { type: boolean } }
+
   /v1/sessions/{id}/todos:
     get:
       tags: [ProjectManagement]
       operationId: getTodos
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses: { "200": { description: Todos (read-only). } }
+
   /v1/schedules:
     get: { tags: [ProjectManagement], operationId: listSchedules, responses: { "200": { description: Schedules. } } }
     post:
       tags: [ProjectManagement]
       operationId: createSchedule
-      requestBody: { content: { application/json: { schema: { type: object } } } }
-      responses: { "200": { description: Created. } }
+      summary: Create a cron schedule.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, cronExpr, actionKind]
+              properties:
+                name: { type: string }
+                cronExpr: { type: string }
+                actionKind: { type: string }
+                actionPayload: { type: object, additionalProperties: true }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { taskId: { type: string } }
+
+  /v1/schedules/{task_id}:
+    patch:
+      tags: [ProjectManagement]
+      operationId: updateSchedule
+      summary: Update a cron schedule.
+      parameters: [{ name: task_id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                cronExpr: { type: string }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { updated: { type: boolean } }
+    delete:
+      tags: [ProjectManagement]
+      operationId: deleteSchedule
+      summary: Delete a cron schedule.
+      parameters: [{ name: task_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { deleted: { type: boolean } }
+
   /v1/workflows:
     get: { tags: [ProjectManagement], operationId: listWorkflows, responses: { "200": { description: Workflows. } } }
     post:
       tags: [ProjectManagement]
       operationId: createWorkflow
-      requestBody: { content: { application/json: { schema: { type: object } } } }
-      responses: { "200": { description: Created. } }
+      summary: Create a workflow definition.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, source]
+              properties:
+                name: { type: string }
+                source: { type: string }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { workflowId: { type: string } }
+
+  /v1/workflows/lint:
+    post:
+      tags: [ProjectManagement]
+      operationId: lintWorkflow
+      summary: Compile-check a workflow source.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties:
+                source: { type: string }
+      responses:
+        "200":
+          description: Lint result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  errors: { type: array, items: { type: string } }
+
+  /v1/workflows/{workflow_id}:
+    get:
+      tags: [ProjectManagement]
+      operationId: getWorkflow
+      summary: Get one workflow definition (with source).
+      parameters: [{ name: workflow_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Workflow definition.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workflowId: { type: string }
+                  name: { type: string }
+                  source: { type: string }
+                  compileStatus: { type: string }
+                  enabled: { type: boolean }
+                  createdAt: { type: [string, integer] }
+                  updatedAt: { type: [string, integer] }
+        "404": { $ref: "#/components/responses/LegacyError" }
+    patch:
+      tags: [ProjectManagement]
+      operationId: updateWorkflow
+      summary: Update a workflow definition.
+      parameters: [{ name: workflow_id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                source: { type: string }
+                enabled: { type: boolean }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+    delete:
+      tags: [ProjectManagement]
+      operationId: deleteWorkflow
+      summary: Delete a workflow definition.
+      parameters: [{ name: workflow_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { deleted: { type: boolean } }
+
+  /v1/workflows/{workflow_id}/run:
+    post:
+      tags: [ProjectManagement]
+      operationId: runWorkflow
+      summary: Run a workflow.
+      parameters: [{ name: workflow_id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input: { type: object, additionalProperties: true }
+                trigger: { type: string }
+      responses:
+        "200":
+          description: Run started.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runId: { type: string }
+                  status: { type: string }
+
+  /v1/workflows/runs/{run_id}:
+    get:
+      tags: [ProjectManagement]
+      operationId: getWorkflowRun
+      summary: Get a workflow run's status, events, and output.
+      parameters: [{ name: run_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Run status + events + output.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runId: { type: string }
+                  status: { type: string }
+                  startedAt: { type: [string, integer, "null"] }
+                  completedAt: { type: [string, integer, "null"] }
+                  output: { type: [object, array, "null"], additionalProperties: true }
+                  error: { type: [string, "null"] }
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        seq: { type: integer }
+                        ts: { type: [string, integer] }
+                        level: { type: string }
+                        message: { type: string }
+        "404": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/workflows/runs/{run_id}/cancel:
+    post:
+      tags: [ProjectManagement]
+      operationId: cancelWorkflowRun
+      summary: Cancel a running workflow.
+      parameters: [{ name: run_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Cancelled.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { cancelled: { type: boolean } }
 
   /v1/flags:
     get:
@@ -681,3 +1189,12 @@ components:
           properties:
             code: { type: string }
             message: { type: string }
+    AddMemoryRequest:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string }
+        metadata:
+          type: object
+          description: Opaque string key/value metadata stored with the memory.
+          additionalProperties: { type: string }

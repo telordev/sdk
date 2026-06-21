@@ -68,9 +68,12 @@ Errors for the Messages/Models surfaces use the **Anthropic error envelope**:
 | 401  | `authentication_error`  | Missing/invalid API key.                 |
 | 403  | `permission_error`      | Key lacks permission.                    |
 | 404  | `not_found_error`       | Resource not found.                      |
+| 409  | `api_error`             | Conflict (e.g. concurrent update). **Retried** by the SDKs (see below). |
 | 413  | `request_too_large`     | Body exceeds the size limit.             |
+| 422  | `api_error`             | Unprocessable entity (semantically invalid). Not retried. |
 | 429  | `rate_limit_error`      | Rate limit hit — see `retry-after`.      |
 | 500  | `api_error`             | Internal error.                          |
+| 502  | `api_error`             | Upstream/gateway failure (a non-`Unavailable` downstream error maps to `502 bad_gateway`). Retryable as ≥500. |
 | 503  | `overloaded_error`      | Backend unavailable/overloaded (retry).  |
 
 The platform/dashboard surfaces (`/v1/sessions`, `/v1/memories`, `/v1/plugins`,
@@ -80,12 +83,14 @@ fall back to `error.code`).
 
 **SDK error classes** (mirror Anthropic): `APIError` (base, has `.status`,
 `.requestId`, `.type`) → `BadRequestError` (400), `AuthenticationError` (401),
-`PermissionDeniedError` (403), `NotFoundError` (404), `RequestTooLargeError`
-(413), `RateLimitError` (429), `InternalServerError` (500), `OverloadedError`
+`PermissionDeniedError` (403), `NotFoundError` (404), `ConflictError` (409),
+`RequestTooLargeError` (413), `UnprocessableEntityError` (422),
+`RateLimitError` (429), `InternalServerError` (500), `OverloadedError`
 (503), plus `APIConnectionError` / `APITimeoutError` for transport failures.
 
 **Retries:** retry on `408`, `409`, `429`, and `≥500` with exponential backoff
-(default `max_retries = 2`; honor `retry-after`). Do not retry other 4xx.
+(default `max_retries = 2`; honor `retry-after`). `409` (conflict) is retried;
+`422` (unprocessable entity) is not. Do not retry other 4xx.
 
 ---
 
@@ -115,6 +120,9 @@ fall back to `error.code`).
 - `{"type":"image","source":{"type":"base64","media_type":"image/png","data":"<b64>"}}`
 - `{"type":"tool_use","id":"toolu_...","name":"...","input":{...}}` (echo assistant turn)
 - `{"type":"tool_result","tool_use_id":"toolu_...","content": string | Block[], "is_error"?: bool}`
+- `{"type":"thinking","thinking":"..."}` (echo a prior assistant thinking turn; the
+  gateway accepts it and echoes the text back into the prompt context). Note: a
+  `{"type":"redacted_thinking",...}` block is currently dropped (ignored).
 
 **Response — `Message` object (non-stream):**
 
@@ -140,14 +148,17 @@ fall back to `error.code`).
 `event: <type>\ndata: <json>\n\n`, in order:
 
 1. `message_start` — `{"type":"message_start","message":{...Message with empty content, usage.input_tokens}}`
-2. `content_block_start` — `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
-3. `ping` — `{"type":"ping"}`
+2. `ping` — `{"type":"ping"}`
+3. `content_block_start` — `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
 4. `content_block_delta` (repeated) — `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"..."}}`
    - tool args stream as `{"type":"input_json_delta","partial_json":"..."}` on a `tool_use` block.
 5. `content_block_stop` — `{"type":"content_block_stop","index":0}`
 6. `message_delta` — `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":34}}`
 7. `message_stop` — `{"type":"message_stop"}`
 8. mid-stream errors: `event: error\ndata: {"type":"error","error":{"type":"...","message":"..."}}`
+
+The `ping` is emitted immediately after `message_start`, before the first
+`content_block_start` (matching the Anthropic wire and warp's actual emission).
 
 `message_start.usage.input_tokens` is an estimate; `message_delta.usage.output_tokens`
 is authoritative. The SDK streaming helper **accumulates** events into a final
@@ -220,7 +231,7 @@ the orchestrator). Distinct from the stateless Messages API.
 ## 7. Memories API
 
 - `GET /v1/memories` → `{"memories":[...]}`
-- `POST /v1/memories` `{content, ...}` → created memory
+- `POST /v1/memories` `{text, metadata?}` → created memory
 - `DELETE /v1/memories/{id}` → `{}`
 - `GET /v1/memories/stats` → stats object
 
@@ -234,8 +245,8 @@ the orchestrator). Distinct from the stateless Messages API.
 - `GET /v1/plugins/registry` → marketplace listing
 - `GET /v1/plugins/registry/{id}` → one registry entry
 - `GET /v1/plugins/installed` → installed plugins
-- `POST /v1/plugins/install` `{id, ...}` → result
-- `POST /v1/plugins/uninstall` `{id}` → result
+- `POST /v1/plugins/install` `{plugin_name, ...}` → result
+- `POST /v1/plugins/uninstall` `{plugin_name}` → result
 
 ---
 
