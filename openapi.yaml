@@ -1362,6 +1362,38 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LegacyError'
+  /v1/plugins/enabled:
+    post:
+      tags:
+      - Plugins
+      summary: Enable or disable an installed plugin.
+      operationId: setPluginEnabled
+      requestBody:
+        description: '`{plugin_name, enabled}`'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '200':
+          description: Toggle result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
   /v1/plugins/install:
     post:
       tags:
