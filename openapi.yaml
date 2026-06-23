@@ -258,6 +258,14 @@ paths:
                     (e.g. {"team":"eng","role":"runner"}).
                   additionalProperties:
                     type: string
+                connectors:
+                  type: array
+                  description: >
+                    Connectors to attach to this session (spec §1.4). Each entry
+                    references a registered connector and may supply a per-session
+                    team bearer override. Omitted from the wire body when absent.
+                  items:
+                    $ref: "#/components/schemas/SessionConnector"
       responses:
         "200":
           description: Session.
@@ -786,6 +794,29 @@ components:
                 - api_error
                 - overloaded_error
             message: { type: string }
+    SessionConnector:
+      type: object
+      description: >
+        A connector attachment included when creating a session (spec §1.4).
+        References a registered connector by ``connector_id`` and optionally
+        overrides its credentials for this session only.
+      required: [connector_id]
+      properties:
+        connector_id:
+          type: string
+          description: The connector ID (from ``POST /v1/connectors``).
+        bearer:
+          type: string
+          nullable: true
+          description: >
+            Per-session team bearer override. When set, replaces the connector's
+            stored default bearer for this session.
+        headers:
+          type: object
+          nullable: true
+          additionalProperties:
+            type: string
+          description: Per-session static header overrides (key → value).
     ConnectorAuth:
       type: object
       description: >
