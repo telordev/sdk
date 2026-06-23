@@ -11,6 +11,7 @@ info:
     Authoritative contract: `sdk/CONTRACT.md`. Gateway: `simse-warp`.
   license:
     name: MIT
+    url: https://opensource.org/licenses/MIT
 servers:
   - url: https://api.simse.dev
 security:
@@ -18,21 +19,38 @@ security:
   - BearerAuth: []
 tags:
   - name: Messages
+    description: Anthropic-wire-compatible inference (flagship).
   - name: Models
+    description: Hosted model catalog.
   - name: Account
+    description: Account, usage, billing, and subagent history.
   - name: Sessions
+    description: Persistent agentic sessions (prompt loop + history).
   - name: Connectors
+    description: Remote-MCP connector registry (session tool surface).
   - name: Memories
+    description: Adaptive long-term memory (quill).
   - name: Plugins
+    description: Plugin / marketplace registry (quiver).
   - name: ProjectManagement
+    description: Kanban tasks, projects, todos, schedules, and workflows (slate).
   - name: Flags
+    description: Feature-flag discovery.
 
 paths:
+  # ── Messages ──────────────────────────────────────────────────────────────────
+
   /v1/messages:
     post:
       tags: [Messages]
       operationId: createMessage
       summary: Create a Message (Anthropic-wire-compatible).
+      description: |
+        When `stream` is false the response is a `Message` object.
+        When `stream` is true the response is a `text/event-stream` of named SSE
+        events (`message_start` → `content_block_start` → `content_block_delta` →
+        `content_block_stop` → `message_delta` → `message_stop`, plus `ping`).
+        Errors mid-stream are emitted as `event: error\ndata: {...}\n\n`.
       parameters:
         - $ref: "#/components/parameters/AnthropicVersion"
       requestBody:
@@ -40,11 +58,29 @@ paths:
         content:
           application/json:
             schema: { $ref: "#/components/schemas/CreateMessageRequest" }
+            examples:
+              basic:
+                summary: Simple user message
+                value:
+                  model: zoysia
+                  max_tokens: 1024
+                  messages:
+                    - role: user
+                      content: What is the capital of France?
+              streaming:
+                summary: Streamed response
+                value:
+                  model: zoysia
+                  max_tokens: 512
+                  stream: true
+                  messages:
+                    - role: user
+                      content: Tell me a short joke.
       responses:
         "200":
           description: |
-            A `Message` (when `stream` is false), or a `text/event-stream` of
-            named SSE events (when `stream` is true).
+            A `Message` object (when `stream` is false), or a `text/event-stream`
+            of named SSE events (when `stream` is true).
           headers:
             request-id: { $ref: "#/components/headers/RequestId" }
             anthropic-ratelimit-requests-limit: { $ref: "#/components/headers/RateLimitLimit" }
@@ -56,7 +92,12 @@ paths:
             text/event-stream:
               schema:
                 type: string
-                description: SSE stream of MessageStreamEvent (event/data lines).
+                description: |
+                  SSE stream of `MessageStreamEvent` named events. Each event is
+                  `event: <type>\ndata: <json>\n\n`. Sequence:
+                  `message_start` → `content_block_start` → `ping` →
+                  `content_block_delta` (×N) → `content_block_stop` →
+                  `message_delta` → `message_stop`. Error events: `event: error`.
         "400": { $ref: "#/components/responses/AnthropicError" }
         "401": { $ref: "#/components/responses/AnthropicError" }
         "429": { $ref: "#/components/responses/AnthropicError" }
@@ -76,16 +117,18 @@ paths:
             schema: { $ref: "#/components/schemas/CountTokensRequest" }
       responses:
         "200":
-          description: Token count.
+          description: Token count estimate.
           content:
             application/json:
               schema:
                 type: object
                 required: [input_tokens]
                 properties:
-                  input_tokens: { type: integer }
+                  input_tokens: { type: integer, description: Estimated input token count. }
         "400": { $ref: "#/components/responses/AnthropicError" }
         "401": { $ref: "#/components/responses/AnthropicError" }
+
+  # ── Models ────────────────────────────────────────────────────────────────────
 
   /v1/models:
     get:
@@ -102,6 +145,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ModelList" }
+        "401": { $ref: "#/components/responses/AnthropicError" }
 
   /v1/models/{model_id}:
     get:
@@ -118,42 +162,33 @@ paths:
               schema: { $ref: "#/components/schemas/Model" }
         "404": { $ref: "#/components/responses/AnthropicError" }
 
+  # ── Account ───────────────────────────────────────────────────────────────────
+
   /v1/account:
     get:
       tags: [Account]
       operationId: getAccount
-      summary: Get the authenticated account.
+      summary: Get the authenticated platform account.
       responses:
         "200":
-          description: Account.
+          description: Account object.
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  id: { type: string }
-                  user_id: { type: string }
-                  plan: { type: string }
+              schema: { $ref: "#/components/schemas/Account" }
+        "401": { $ref: "#/components/responses/LegacyError" }
 
   /v1/usage:
     get:
       tags: [Account]
       operationId: getUsage
-      summary: Get token usage for the current period.
+      summary: Get token usage summary for the current billing period.
       responses:
         "200":
-          description: Usage.
+          description: Usage summary.
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  period: { type: string }
-                  requests: { type: integer }
-                  tokens: { type: integer }
-                  by_model:
-                    type: object
-                    additionalProperties: { type: integer }
+              schema: { $ref: "#/components/schemas/UsageSummary" }
+        "401": { $ref: "#/components/responses/LegacyError" }
 
   /v1/usage/dashboard:
     get:
@@ -165,26 +200,8 @@ paths:
           description: Usage dashboard.
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  plan: { type: string }
-                  periodStart: { type: integer }
-                  models:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        model: { type: string }
-                        includedInputTokens: { type: integer }
-                        includedOutputTokens: { type: integer }
-                        extraInputTokens: { type: integer }
-                        extraOutputTokens: { type: integer }
-                        extraSpendCents: { type: integer }
-                        requestCount: { type: integer }
-                        multiplier: { type: number }
-                  billing: { type: object, additionalProperties: true }
-                  compute: { type: [object, "null"], additionalProperties: true }
+              schema: { $ref: "#/components/schemas/UsageDashboard" }
+        "401": { $ref: "#/components/responses/LegacyError" }
 
   /v1/agents:
     get:
@@ -193,27 +210,11 @@ paths:
       summary: Subagent run history (newest first).
       responses:
         "200":
-          description: Agents.
+          description: Agents list.
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  agents:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        id: { type: string }
-                        description: { type: string }
-                        status: { type: string }
-                        started_at: { type: [string, integer] }
-                        completed_at: { type: [string, integer] }
-                        duration_ms: { type: integer }
-                        turns: { type: integer }
-                        input_tokens: { type: integer }
-                        output_tokens: { type: integer }
-                        error: { type: [string, "null"] }
+              schema: { $ref: "#/components/schemas/AgentList" }
+        "401": { $ref: "#/components/responses/LegacyError" }
 
   /v1/billing:
     get:
@@ -222,97 +223,131 @@ paths:
       summary: Get plan + limits.
       responses:
         "200":
-          description: Billing.
+          description: Billing summary.
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  plan: { type: string }
-                  status: { type: string }
-                  limits: { type: object, additionalProperties: true }
-                  current_usage: { type: object, additionalProperties: true }
+              schema: { $ref: "#/components/schemas/BillingSummary" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+
+  # ── Sessions ──────────────────────────────────────────────────────────────────
 
   /v1/sessions:
     post:
       tags: [Sessions]
       operationId: createSession
       summary: Create an agentic session.
+      description: |
+        Creates a new persistent session. If `connectors` are supplied, each is
+        validated via a live `tools/list` probe against the MCP server — the
+        session is rolled back and an error returned if any connector fails
+        validation (spec §1.4). Returns **201 Created**.
       requestBody:
         content:
           application/json:
-            schema:
-              type: object
-              properties:
-                model: { type: string }
-                title: { type: string }
-                system:
-                  type: string
-                  description: >
-                    Per-session system prompt (persona + guardrails). Injected
-                    into every prompt turn and resume for this session (spec §2.2).
-                metadata:
-                  type: object
-                  description: >
-                    Arbitrary key-value metadata attached to the session
-                    (e.g. {"team":"eng","role":"runner"}).
-                  additionalProperties:
-                    type: string
-                connectors:
-                  type: array
-                  description: >
-                    Connectors to attach to this session (spec §1.4). Each entry
-                    references a registered connector and may supply a per-session
-                    team bearer override. Omitted from the wire body when absent.
-                  items:
-                    $ref: "#/components/schemas/SessionConnector"
+            schema: { $ref: "#/components/schemas/CreateSessionParams" }
+            examples:
+              minimal:
+                summary: Minimal session (no system prompt)
+                value:
+                  title: My coding session
+              with_connector:
+                summary: Session with attached MCP connector
+                value:
+                  title: Agent with tools
+                  system: You are a helpful assistant. Never move money without approval.
+                  metadata:
+                    team: eng
+                    role: runner
+                  connectors:
+                    - connector_id: conn_abc123
+                      bearer: team-bearer-token
       responses:
-        "200":
-          description: Session.
+        "201":
+          description: Session created.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Session" }
+              schema: { $ref: "#/components/schemas/SessionCreated" }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "404":
+          description: A referenced connector was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyError" }
+        "502":
+          description: A connector MCP server was unreachable during validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegacyError" }
     get:
       tags: [Sessions]
       operationId: listSessions
-      summary: List sessions.
+      summary: List sessions (newest first).
       responses:
         "200":
-          description: Sessions.
+          description: Sessions list.
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  sessions:
-                    type: array
-                    items: { $ref: "#/components/schemas/Session" }
+              schema: { $ref: "#/components/schemas/SessionList" }
+        "401": { $ref: "#/components/responses/LegacyError" }
 
   /v1/sessions/{id}:
     get:
       tags: [Sessions]
       operationId: getSession
+      summary: Get a single session by ID.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
         "200":
-          description: Session.
+          description: Session object.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Session" }
+        "401": { $ref: "#/components/responses/LegacyError" }
         "404": { $ref: "#/components/responses/LegacyError" }
     delete:
       tags: [Sessions]
       operationId: deleteSession
+      summary: Delete a session and its history.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
-        "200": { description: Deleted. }
+        "200":
+          description: Session deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted, id]
+                properties:
+                  deleted: { type: boolean, const: true }
+                  id: { type: string }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "404": { $ref: "#/components/responses/LegacyError" }
 
   /v1/sessions/{id}/messages:
     post:
       tags: [Sessions]
       operationId: promptSession
       summary: Send a prompt to a session (buffered or streamed).
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      description: |
+        Forwards the user content to the model orchestrator. Persists the user
+        turn before calling the model so history is consistent on resume.
+
+        When `stream` is false (default): blocks until the model completes and
+        returns `{message, usage}`.
+
+        When `stream` is true: returns `text/event-stream`. Each frame is
+        `data: <json>\n\n` where `<json>` is a `SessionStreamEvent`. The stream
+        terminates with `data: [DONE]\n\n` after the `done` or `error` event.
+
+        SSE event types:
+        - `delta` — incremental text token.
+        - `tool_call` — the model invoked a tool.
+        - `tool_result` — the tool result was returned to the model.
+        - `done` — the turn is complete (carries final text + token counts).
+        - `error` — the model or backend returned an error; stream closes after.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
       requestBody:
         required: true
         content:
@@ -321,64 +356,129 @@ paths:
               type: object
               required: [content]
               properties:
-                content: { type: string }
-                stream: { type: boolean, default: false }
+                content:
+                  type: string
+                  description: The user message text (max 100 KiB).
+                  maxLength: 102400
+                stream:
+                  type: boolean
+                  default: false
+                  description: When true, respond with SSE instead of buffering.
       responses:
         "200":
-          description: Buffered turn, or an SSE stream of prompt events.
+          description: |
+            Buffered turn (`stream:false`), or an SSE stream of `SessionStreamEvent`
+            objects (`stream:true`).
           content:
             application/json:
+              schema: { $ref: "#/components/schemas/SessionPromptResponse" }
+            text/event-stream:
               schema:
                 type: object
-                properties:
-                  message:
-                    type: object
-                    properties:
-                      role: { type: string }
-                      content: { type: string }
-                  usage: { $ref: "#/components/schemas/SessionUsage" }
-            text/event-stream:
-              schema: { type: string }
+                description: |
+                  `data: <SessionStreamEvent JSON>\n\n` frames, terminated by
+                  `data: [DONE]\n\n`. The `done` and `error` events are each
+                  followed immediately by the `[DONE]` sentinel.
+                oneOf:
+                  - $ref: "#/components/schemas/SessionStreamEvent"
+                  - type: string
+                    const: "[DONE]"
+                    description: Terminal sentinel frame.
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "404": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
 
   /v1/sessions/{id}/resume:
     post:
       tags: [Sessions]
       operationId: resumeSession
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: Resumed. } }
+      summary: Rehydrate session history for client-side resume.
+      description: |
+        Read-only: reconstructs the conversation from the durable chat-store —
+        the message history plus tool-call records. The client interleaves both
+        arrays by `created_at` to re-render the full turn sequence.
+
+        This is NOT a prompt endpoint — it does not send any message to the model.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Session history.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResumeResponse" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "404": { $ref: "#/components/responses/LegacyError" }
 
   /v1/sessions/{id}/abort:
     post:
       tags: [Sessions]
       operationId: abortSession
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: Aborted. } }
+      summary: Cancel an in-flight prompt for this session.
+      description: |
+        Sends an abort signal to the loom orchestrator
+        (`SessionService.Abort`). If no prompt is in flight the RPC succeeds
+        silently. Returns `{aborted:true}` on success.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Abort acknowledged.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [aborted, id]
+                properties:
+                  aborted: { type: boolean, const: true }
+                  id: { type: string }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "404": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  # ── Connectors ────────────────────────────────────────────────────────────────
 
   /v1/connectors:
     post:
       tags: [Connectors]
       operationId: createConnector
       summary: Register a remote-MCP connector.
+      description: |
+        Persists the connector definition in the chat-store. The bearer token
+        and static header values are stored server-side and **never returned**
+        in any response (spec §1.3). Returns **201 Created**.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/ConnectorCreateParams" }
+            examples:
+              bearer_auth:
+                summary: Bearer-authenticated MCP server
+                value:
+                  name: My MCP Server
+                  type: mcp
+                  url: https://mcp.example.com/mcp
+                  auth:
+                    kind: bearer
+                    value: tok_supersecret
+                  tool_allowlist: [search, read_file]
       responses:
         "201":
           description: Connector created.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Connector" }
-        "401": { $ref: "#/components/responses/LegacyError" }
         "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
     get:
       tags: [Connectors]
       operationId: listConnectors
-      summary: List connectors (secrets redacted).
+      summary: List connectors for the authenticated user (secrets redacted).
       responses:
         "200":
-          description: Connectors.
+          description: Connector list.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ConnectorList" }
@@ -392,10 +492,11 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
         "200":
-          description: Connector.
+          description: Connector object.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Connector" }
+        "401": { $ref: "#/components/responses/LegacyError" }
         "404": { $ref: "#/components/responses/LegacyError" }
     patch:
       tags: [Connectors]
@@ -413,6 +514,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Connector" }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
         "404": { $ref: "#/components/responses/LegacyError" }
     delete:
       tags: [Connectors]
@@ -421,14 +524,16 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
         "200":
-          description: Deleted.
+          description: Connector deleted.
           content:
             application/json:
               schema:
                 type: object
+                required: [deleted, id]
                 properties:
-                  deleted: { type: boolean }
+                  deleted: { type: boolean, const: true }
                   id: { type: string }
+        "401": { $ref: "#/components/responses/LegacyError" }
         "404": { $ref: "#/components/responses/LegacyError" }
 
   /v1/connectors/{id}/test:
@@ -436,120 +541,877 @@ paths:
       tags: [Connectors]
       operationId: testConnector
       summary: Probe the MCP server with a live tools/list call.
+      description: |
+        Performs a live `tools/list` JSON-RPC call against the connector's MCP
+        endpoint. A bearer or header override in the request body takes
+        precedence over the stored credentials. A failed probe (`ok: false`) is
+        still a **200 response** — the failure is reported in-band, not as an
+        HTTP error.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bearer:
+                  type: string
+                  description: >
+                    Override the connector's stored bearer for this test call only.
+                    An empty string is treated as absent.
+                headers:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: >
+                    Merge these headers on top of the connector's stored static
+                    headers for this test call only.
       responses:
         "200":
           description: |
             Test result. A failed probe (`ok: false`) is still a 200 response —
-            the failure is reported in-band, not as an HTTP error.
+            the failure is reported in-band.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ConnectorTestResult" }
+        "401": { $ref: "#/components/responses/LegacyError" }
         "404": { $ref: "#/components/responses/LegacyError" }
+
+  # ── Memories ──────────────────────────────────────────────────────────────────
 
   /v1/memories:
     get:
       tags: [Memories]
       operationId: listMemories
-      responses: { "200": { description: Memories. } }
+      summary: List (or search) adaptive memories for the caller.
+      description: |
+        Without `query`: returns memories in recency order (`memory_list`).
+        With `query`: performs semantic search (`memory_search`). User scope is
+        forced to the authenticated caller's `user_id` server-side.
+      parameters:
+        - { name: query, in: query, schema: { type: string }, description: Semantic search query. }
+        - { name: limit, in: query, schema: { type: integer }, description: Max results. }
+      responses:
+        "200":
+          description: Memory list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemoryList" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
     post:
       tags: [Memories]
       operationId: addMemory
+      summary: Add a new memory entry.
       requestBody:
-        content: { application/json: { schema: { type: object } } }
-      responses: { "200": { description: Created. } }
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text:
+                  type: string
+                  description: The text content to remember.
+                metadata:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: Optional key-value metadata.
+      responses:
+        "201":
+          description: Memory created. Returns the new memory ID.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id: { type: string, description: The ID of the new memory entry. }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
   /v1/memories/stats:
     get:
       tags: [Memories]
       operationId: memoryStats
-      responses: { "200": { description: Stats. } }
+      summary: Memory store statistics for the caller.
+      responses:
+        "200":
+          description: Stats.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemoryStats" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
   /v1/memories/{id}:
     delete:
       tags: [Memories]
       operationId: deleteMemory
+      summary: Delete a memory entry.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: Deleted. } }
+      responses:
+        "200":
+          description: Memory deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  # ── Plugins ───────────────────────────────────────────────────────────────────
 
   /v1/plugins:
-    get: { tags: [Plugins], operationId: listPlugins, responses: { "200": { description: Plugins. } } }
+    get:
+      tags: [Plugins]
+      operationId: listPlugins
+      summary: Built-in tool defs + the caller's installed plugin list with status.
+      responses:
+        "200":
+          description: Plugin list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginSurface" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
   /v1/plugins/registry:
-    get: { tags: [Plugins], operationId: listRegistry, responses: { "200": { description: Registry. } } }
+    get:
+      tags: [Plugins]
+      operationId: listRegistry
+      summary: The bundled plugin registry catalog (marketplace).
+      responses:
+        "200":
+          description: Registry catalog.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RegistryCatalog" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
   /v1/plugins/registry/{id}:
     get:
       tags: [Plugins]
       operationId: registryDetail
+      summary: Manifest + readme for one registry plugin.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: Registry entry. } }
+      responses:
+        "200":
+          description: Registry entry detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RegistryDetail" }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
   /v1/plugins/installed:
-    get: { tags: [Plugins], operationId: listInstalled, responses: { "200": { description: Installed. } } }
+    get:
+      tags: [Plugins]
+      operationId: listInstalled
+      summary: Installed plugins for the authenticated caller.
+      responses:
+        "200":
+          description: Installed plugins.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstalledPluginList" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
   /v1/plugins/install:
     post:
       tags: [Plugins]
       operationId: installPlugin
-      requestBody: { content: { application/json: { schema: { type: object } } } }
-      responses: { "200": { description: Installed. } }
+      summary: Install a plugin from the registry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plugin_name]
+              properties:
+                plugin_name: { type: string, description: Registry plugin name. }
+                permissions:
+                  type: array
+                  items: { type: string }
+                  description: Permission grants to request.
+                secrets:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: Secret values required by the plugin (write-only; never returned).
+      responses:
+        "200":
+          description: Install result.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [installed]
+                properties:
+                  installed: { type: boolean }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
   /v1/plugins/uninstall:
     post:
       tags: [Plugins]
       operationId: uninstallPlugin
-      requestBody: { content: { application/json: { schema: { type: object } } } }
-      responses: { "200": { description: Uninstalled. } }
+      summary: Uninstall a plugin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plugin_name]
+              properties:
+                plugin_name: { type: string, description: Plugin name to uninstall. }
+      responses:
+        "200":
+          description: Uninstall result.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [uninstalled]
+                properties:
+                  uninstalled: { type: boolean }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  # ── Project management — kanban (session-scoped) ──────────────────────────────
 
   /v1/sessions/{id}/tasks:
     get:
       tags: [ProjectManagement]
-      operationId: listTasks
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: Tasks. } }
+      operationId: listBoard
+      summary: Get the full kanban board for a session.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: project_id, in: query, schema: { type: string }, description: Filter to a project. }
+      responses:
+        "200":
+          description: Board (tasks + projects + dependency edges).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BoardResponse" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
     post:
       tags: [ProjectManagement]
       operationId: createTask
+      summary: Create a task card.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      requestBody: { content: { application/json: { schema: { type: object } } } }
-      responses: { "200": { description: Created. } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTaskParams" }
+      responses:
+        "201":
+          description: Task created. Returns the new task ID.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [taskId]
+                properties:
+                  taskId: { type: string }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/sessions/{id}/tasks/{task_id}:
+    get:
+      tags: [ProjectManagement]
+      operationId: getTask
+      summary: Get a task, its subtasks, and dependency edges.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Task detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskDetail" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "404": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+    patch:
+      tags: [ProjectManagement]
+      operationId: updateTask
+      summary: Partially update a task.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateTaskParams" }
+      responses:
+        "200":
+          description: Update result.
+          content:
+            application/json:
+              schema: { type: object, required: [ok], properties: { ok: { type: boolean } } }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+    delete:
+      tags: [ProjectManagement]
+      operationId: deleteTask
+      summary: Delete a task.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Delete result.
+          content:
+            application/json:
+              schema: { type: object, required: [deleted], properties: { deleted: { type: boolean } } }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "404": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/sessions/{id}/tasks/{task_id}/move:
+    post:
+      tags: [ProjectManagement]
+      operationId: moveTask
+      summary: Move a task card to a different column (status).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, description: Target column status (e.g. todo/in_progress/done). }
+                sortOrder: { type: number, description: Sort position within the column. }
+      responses:
+        "200":
+          description: Move result.
+          content:
+            application/json:
+              schema: { type: object, required: [ok], properties: { ok: { type: boolean } } }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/sessions/{id}/tasks/{task_id}/checklist:
+    put:
+      tags: [ProjectManagement]
+      operationId: setChecklist
+      summary: Replace a task's checklist.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                checklist:
+                  type: array
+                  items: { type: object, additionalProperties: true }
+                  description: Checklist items (structured array or pre-serialised JSON).
+                checklist_json:
+                  type: string
+                  description: Pre-serialised checklist JSON string (alternative to `checklist`).
+      responses:
+        "200":
+          description: Checklist updated.
+          content:
+            application/json:
+              schema: { type: object, required: [ok], properties: { ok: { type: boolean } } }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/sessions/{id}/tasks/{task_id}/deps:
+    post:
+      tags: [ProjectManagement]
+      operationId: addDependency
+      summary: Add a dependency (this task blocks another).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [blocksTaskId]
+              properties:
+                blocksTaskId: { type: string, description: The task that this task blocks. }
+      responses:
+        "200":
+          description: Dependency added.
+          content:
+            application/json:
+              schema: { type: object, required: [ok], properties: { ok: { type: boolean } } }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/sessions/{id}/tasks/{task_id}/deps/{blocks_task_id}:
+    delete:
+      tags: [ProjectManagement]
+      operationId: removeDependency
+      summary: Remove a dependency edge.
+      description: The blocker task ID is a path parameter (CF drops DELETE bodies).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+        - { name: blocks_task_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Dependency removed.
+          content:
+            application/json:
+              schema: { type: object, required: [ok], properties: { ok: { type: boolean } } }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
   /v1/sessions/{id}/projects:
     get:
       tags: [ProjectManagement]
       operationId: listProjects
+      summary: List projects for a session.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: Projects. } }
+      responses:
+        "200":
+          description: Projects.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [projects]
+                properties:
+                  projects:
+                    type: array
+                    items: { $ref: "#/components/schemas/Project" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+    post:
+      tags: [ProjectManagement]
+      operationId: createProject
+      summary: Create a project.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 512 }
+                description: { type: string }
+      responses:
+        "201":
+          description: Project created.
+          content:
+            application/json:
+              schema: { type: object, required: [projectId], properties: { projectId: { type: string } } }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/sessions/{id}/projects/{project_id}:
+    patch:
+      tags: [ProjectManagement]
+      operationId: updateProject
+      summary: Update a project.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: project_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                archived: { type: boolean }
+      responses:
+        "200":
+          description: Update result.
+          content:
+            application/json:
+              schema: { type: object, required: [ok], properties: { ok: { type: boolean } } }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+    delete:
+      tags: [ProjectManagement]
+      operationId: deleteProject
+      summary: Delete a project.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: project_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Delete result.
+          content:
+            application/json:
+              schema: { type: object, required: [deleted], properties: { deleted: { type: boolean } } }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
   /v1/sessions/{id}/todos:
     get:
       tags: [ProjectManagement]
       operationId: getTodos
+      summary: Get the session's model-managed todo list (read-only).
+      description: |
+        Returns the Claude/Codex-style todo list written by the model during its
+        agentic loop. This is READ-ONLY from the API — `SetTodos` is the model's
+        own path and slate svid-rejects warp by design.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { "200": { description: Todos (read-only). } }
+      responses:
+        "200":
+          description: Todo list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [todos]
+                properties:
+                  todos:
+                    type: array
+                    items: { type: object, additionalProperties: true }
+                    description: Todo items as written by the model (opaque object array).
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  # ── Schedules (user-scoped) ───────────────────────────────────────────────────
+
   /v1/schedules:
-    get: { tags: [ProjectManagement], operationId: listSchedules, responses: { "200": { description: Schedules. } } }
+    get:
+      tags: [ProjectManagement]
+      operationId: listSchedules
+      summary: List cron schedules for the caller.
+      responses:
+        "200":
+          description: Schedules.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schedules]
+                properties:
+                  schedules:
+                    type: array
+                    items: { $ref: "#/components/schemas/Schedule" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
     post:
       tags: [ProjectManagement]
       operationId: createSchedule
-      requestBody: { content: { application/json: { schema: { type: object } } } }
-      responses: { "200": { description: Created. } }
+      summary: Create a cron schedule.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, cronExpr, actionKind]
+              properties:
+                name: { type: string }
+                cronExpr: { type: string, description: Cron expression (e.g. "0 9 * * 1-5"). }
+                actionKind: { type: string, description: What to do when the cron fires. }
+                actionPayload:
+                  type: object
+                  additionalProperties: true
+                  description: Action parameters (or omit for empty payload).
+      responses:
+        "201":
+          description: Schedule created.
+          content:
+            application/json:
+              schema: { type: object, required: [taskId], properties: { taskId: { type: string } } }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/schedules/{task_id}:
+    patch:
+      tags: [ProjectManagement]
+      operationId: updateSchedule
+      summary: Update a cron schedule (enable/disable or change expression).
+      parameters: [{ name: task_id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                cronExpr: { type: string }
+      responses:
+        "200":
+          description: Update result.
+          content:
+            application/json:
+              schema: { type: object, required: [updated], properties: { updated: { type: boolean } } }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+    delete:
+      tags: [ProjectManagement]
+      operationId: deleteSchedule
+      summary: Delete a cron schedule.
+      parameters: [{ name: task_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Delete result.
+          content:
+            application/json:
+              schema: { type: object, required: [deleted], properties: { deleted: { type: boolean } } }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  # ── Workflows (user-scoped) ───────────────────────────────────────────────────
+
   /v1/workflows:
-    get: { tags: [ProjectManagement], operationId: listWorkflows, responses: { "200": { description: Workflows. } } }
+    get:
+      tags: [ProjectManagement]
+      operationId: listWorkflows
+      summary: List workflow definitions for the caller.
+      responses:
+        "200":
+          description: Workflows.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workflows]
+                properties:
+                  workflows:
+                    type: array
+                    items: { $ref: "#/components/schemas/WorkflowSummary" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
     post:
       tags: [ProjectManagement]
       operationId: createWorkflow
-      requestBody: { content: { application/json: { schema: { type: object } } } }
-      responses: { "200": { description: Created. } }
+      summary: Create a workflow definition.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, source]
+              properties:
+                name: { type: string }
+                source: { type: string, description: Workflow source code / definition. }
+      responses:
+        "201":
+          description: Workflow created.
+          content:
+            application/json:
+              schema: { type: object, required: [workflowId], properties: { workflowId: { type: string } } }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/workflows/lint:
+    post:
+      tags: [ProjectManagement]
+      operationId: lintWorkflow
+      summary: Compile-check a workflow source without saving.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties:
+                source: { type: string }
+      responses:
+        "200":
+          description: Lint result.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, errors]
+                properties:
+                  ok: { type: boolean }
+                  errors:
+                    type: array
+                    items: { type: string }
+        "400": { $ref: "#/components/responses/LegacyError" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/workflows/{workflow_id}:
+    get:
+      tags: [ProjectManagement]
+      operationId: getWorkflow
+      summary: Get a workflow definition (with source).
+      parameters: [{ name: workflow_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Workflow detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowDetail" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "404": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+    patch:
+      tags: [ProjectManagement]
+      operationId: updateWorkflow
+      summary: Update a workflow definition.
+      parameters: [{ name: workflow_id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                source: { type: string }
+                enabled: { type: boolean }
+      responses:
+        "200":
+          description: Update result.
+          content:
+            application/json:
+              schema: { type: object, required: [ok], properties: { ok: { type: boolean } } }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+    delete:
+      tags: [ProjectManagement]
+      operationId: deleteWorkflow
+      summary: Delete a workflow definition.
+      parameters: [{ name: workflow_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Delete result.
+          content:
+            application/json:
+              schema: { type: object, required: [deleted], properties: { deleted: { type: boolean } } }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/workflows/{workflow_id}/run:
+    post:
+      tags: [ProjectManagement]
+      operationId: runWorkflow
+      summary: Trigger a workflow run.
+      parameters: [{ name: workflow_id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: object
+                  additionalProperties: true
+                  description: Input payload for the workflow run.
+                trigger: { type: string, description: Trigger label (e.g. "manual"). }
+      responses:
+        "200":
+          description: Run started.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runId, status]
+                properties:
+                  runId: { type: string }
+                  status: { type: string }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/workflows/runs/{run_id}:
+    get:
+      tags: [ProjectManagement]
+      operationId: workflowLogs
+      summary: Get run status, output, and event log for a workflow run.
+      parameters: [{ name: run_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Workflow run result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkflowRun" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "404": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/workflows/runs/{run_id}/cancel:
+    post:
+      tags: [ProjectManagement]
+      operationId: cancelWorkflow
+      summary: Cancel a running workflow.
+      parameters: [{ name: run_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Cancel result.
+          content:
+            application/json:
+              schema: { type: object, required: [cancelled], properties: { cancelled: { type: boolean } } }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "503": { $ref: "#/components/responses/LegacyError" }
+
+  # ── Flags ──────────────────────────────────────────────────────────────────────
 
   /v1/flags:
     get:
       tags: [Flags]
       operationId: getFlags
       summary: Feature flags enabled for the caller.
+      description: |
+        Returns the full flag set evaluated for the authenticated caller. Clients
+        use this to conditionally expose disabled feature groups. This endpoint
+        is exempt from feature-gate gating — it is always accessible.
       responses:
         "200":
-          description: Flags.
+          description: Feature flags.
           content:
             application/json:
               schema:
                 type: object
+                required: [flags]
                 properties:
                   flags:
                     type: object
                     additionalProperties: { type: boolean }
+                    description: Flag name → enabled boolean.
+                    example:
+                      v1.chat: true
+                      v1.sessions: true
+                      v1.connectors: true
+        "401": { $ref: "#/components/responses/LegacyError" }
 
 components:
   securitySchemes:
@@ -557,18 +1419,23 @@ components:
       type: apiKey
       in: header
       name: x-api-key
+      description: Simse platform API key (`sk_…`).
     BearerAuth:
       type: http
       scheme: bearer
+      description: "Simse platform API key as `Authorization: Bearer sk_…`."
+
   parameters:
     AnthropicVersion:
       name: anthropic-version
       in: header
       required: false
+      description: API version date string. Defaults to the latest when absent.
       schema: { type: string, default: "2026-06-01" }
+
   headers:
     RequestId:
-      description: Unique request id (`req_…`).
+      description: Unique request id (`req_…`). Echo in bug reports.
       schema: { type: string }
     RateLimitLimit:
       description: Per-window request budget.
@@ -579,9 +1446,10 @@ components:
     RateLimitReset:
       description: RFC 3339 UTC time the window resets.
       schema: { type: string, format: date-time }
+
   responses:
     AnthropicError:
-      description: Anthropic-shaped error.
+      description: Anthropic-shaped error (Messages/Models surfaces).
       headers:
         request-id: { $ref: "#/components/headers/RequestId" }
         retry-after:
@@ -595,7 +1463,10 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/LegacyError" }
+
   schemas:
+    # ── Messages API ──────────────────────────────────────────────────────────────
+
     CreateMessageRequest:
       type: object
       required: [model, messages, max_tokens]
@@ -621,6 +1492,7 @@ components:
         metadata:
           type: object
           properties: { user_id: { type: string } }
+
     CountTokensRequest:
       type: object
       required: [model, messages]
@@ -636,6 +1508,7 @@ components:
         tools:
           type: array
           items: { $ref: "#/components/schemas/Tool" }
+
     InputMessage:
       type: object
       required: [role, content]
@@ -645,6 +1518,7 @@ components:
           oneOf:
             - { type: string }
             - { type: array, items: { $ref: "#/components/schemas/InputContentBlock" } }
+
     InputContentBlock:
       oneOf:
         - { $ref: "#/components/schemas/TextBlock" }
@@ -652,12 +1526,14 @@ components:
         - { $ref: "#/components/schemas/ToolUseBlock" }
         - { $ref: "#/components/schemas/ToolResultBlock" }
       discriminator: { propertyName: type }
+
     TextBlock:
       type: object
       required: [type, text]
       properties:
         type: { type: string, const: text }
         text: { type: string }
+
     ImageBlock:
       type: object
       required: [type, source]
@@ -670,6 +1546,7 @@ components:
             type: { type: string, const: base64 }
             media_type: { type: string, enum: [image/jpeg, image/png, image/gif, image/webp] }
             data: { type: string }
+
     ToolUseBlock:
       type: object
       required: [type, id, name, input]
@@ -678,6 +1555,7 @@ components:
         id: { type: string }
         name: { type: string }
         input: { type: object, additionalProperties: true }
+
     ToolResultBlock:
       type: object
       required: [type, tool_use_id]
@@ -689,6 +1567,7 @@ components:
             - { type: string }
             - { type: array, items: { $ref: "#/components/schemas/TextBlock" } }
         is_error: { type: boolean }
+
     Tool:
       type: object
       required: [name, input_schema]
@@ -696,12 +1575,14 @@ components:
         name: { type: string }
         description: { type: string }
         input_schema: { type: object, additionalProperties: true }
+
     ToolChoice:
       type: object
       required: [type]
       properties:
         type: { type: string, enum: [auto, any, tool, none] }
-        name: { type: string }
+        name: { type: string, description: Required when type is "tool". }
+
     Message:
       type: object
       required: [id, type, role, model, content, stop_reason, usage]
@@ -718,23 +1599,22 @@ components:
           enum: [end_turn, max_tokens, stop_sequence, tool_use, null]
         stop_sequence: { type: [string, "null"] }
         usage: { $ref: "#/components/schemas/Usage" }
+
     OutputContentBlock:
       oneOf:
         - { $ref: "#/components/schemas/TextBlock" }
         - { $ref: "#/components/schemas/ToolUseBlock" }
       discriminator: { propertyName: type }
+
     Usage:
       type: object
       required: [input_tokens, output_tokens]
       properties:
         input_tokens: { type: integer }
         output_tokens: { type: integer }
-    SessionUsage:
-      type: object
-      description: Anthropic-style token usage (no total_tokens — compute client-side).
-      properties:
-        input_tokens: { type: integer }
-        output_tokens: { type: integer }
+
+    # ── Models ────────────────────────────────────────────────────────────────────
+
     Model:
       type: object
       required: [id, type, display_name, created_at]
@@ -745,6 +1625,7 @@ components:
         created_at: { type: string, format: date-time }
         max_input_tokens: { type: integer }
         max_tokens: { type: integer }
+
     ModelList:
       type: object
       required: [data, has_more]
@@ -753,8 +1634,126 @@ components:
         has_more: { type: boolean }
         first_id: { type: [string, "null"] }
         last_id: { type: [string, "null"] }
+
+    # ── Account ───────────────────────────────────────────────────────────────────
+
+    Account:
+      type: object
+      required: [id, user_id, plan]
+      properties:
+        id: { type: string, description: Platform account ID (`pa_…`). }
+        user_id: { type: string }
+        plan: { type: string }
+
+    UsageSummary:
+      type: object
+      required: [period, requests, tokens, by_model]
+      properties:
+        period: { type: string }
+        requests: { type: integer }
+        tokens: { type: integer }
+        by_model:
+          type: object
+          additionalProperties: { type: integer }
+
+    UsageDashboard:
+      type: object
+      properties:
+        plan: { type: string }
+        periodStart: { type: integer, description: Unix epoch of the billing period start. }
+        models:
+          type: array
+          items:
+            type: object
+            properties:
+              model: { type: string }
+              includedInputTokens: { type: integer }
+              includedOutputTokens: { type: integer }
+              extraInputTokens: { type: integer }
+              extraOutputTokens: { type: integer }
+              extraSpendCents: { type: integer }
+              requestCount: { type: integer }
+              multiplier: { type: number }
+        billing: { type: object, additionalProperties: true }
+        compute: { type: [object, "null"], additionalProperties: true }
+
+    AgentList:
+      type: object
+      required: [agents]
+      properties:
+        agents:
+          type: array
+          items: { $ref: "#/components/schemas/Agent" }
+
+    Agent:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        description: { type: string }
+        status: { type: string }
+        started_at: { type: [string, integer, "null"] }
+        completed_at: { type: [string, integer, "null"] }
+        duration_ms: { type: [integer, "null"] }
+        turns: { type: [integer, "null"] }
+        input_tokens: { type: [integer, "null"] }
+        output_tokens: { type: [integer, "null"] }
+        error: { type: [string, "null"] }
+
+    BillingSummary:
+      type: object
+      properties:
+        plan: { type: string }
+        status: { type: string }
+        limits: { type: object, additionalProperties: true }
+        current_usage: { type: object, additionalProperties: true }
+
+    # ── Sessions ──────────────────────────────────────────────────────────────────
+
+    CreateSessionParams:
+      type: object
+      properties:
+        model:
+          type: string
+          description: Preferred model for this session (e.g. "rye" or "zoysia").
+        title:
+          type: string
+          maxLength: 255
+          description: Human-readable session title.
+        system:
+          type: string
+          description: >
+            Per-session system prompt (persona + guardrails). Injected into
+            every prompt turn and resume for this session (spec §2.2).
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+          description: >
+            Arbitrary key-value metadata attached to the session
+            (e.g. {"team":"eng","role":"runner"}).
+        connectors:
+          type: array
+          description: >
+            Connectors to attach to this session (spec §1.4). Each entry
+            references a registered connector and may supply a per-session
+            team bearer override. Validation (live MCP probe) runs at create
+            time; the session is rolled back on failure.
+          items: { $ref: "#/components/schemas/SessionConnector" }
+
+    SessionCreated:
+      type: object
+      required: [id, status, created_at]
+      description: Response body for a successful `POST /v1/sessions` (201 Created).
+      properties:
+        id: { type: string, description: Session ID. }
+        model: { type: [string, "null"], description: "Preferred model, if set." }
+        status: { type: string, const: active }
+        created_at: { type: string, description: ISO 8601 creation timestamp. }
+
     Session:
       type: object
+      description: >
+        Session summary object returned by GET /v1/sessions and GET /v1/sessions/{id}.
       properties:
         id: { type: string }
         model: { type: [string, "null"] }
@@ -764,14 +1763,599 @@ components:
         created_at: { type: string }
         updated_at: { type: string }
         system:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Per-session system prompt, if set.
         metadata:
-          type: object
-          nullable: true
+          type: [object, "null"]
           additionalProperties: { type: string }
           description: Key-value metadata attached to the session, if set.
+
+    SessionList:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items: { $ref: "#/components/schemas/Session" }
+
+    SessionUsage:
+      type: object
+      description: >
+        Anthropic-style token usage for a session prompt turn
+        (no total_tokens — compute client-side).
+      required: [input_tokens, output_tokens]
+      properties:
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+
+    SessionPromptResponse:
+      type: object
+      description: Buffered response for `POST /v1/sessions/{id}/messages` when `stream` is false.
+      required: [message, usage]
+      properties:
+        message:
+          type: object
+          required: [role, content]
+          properties:
+            role: { type: string, const: assistant }
+            content: { type: string, description: Accumulated assistant response text. }
+        usage: { $ref: "#/components/schemas/SessionUsage" }
+
+    SessionStreamEvent:
+      description: |
+        One SSE data frame emitted by `POST /v1/sessions/{id}/messages` when
+        `stream:true`. The wire format is `data: <json>\n\n`. The stream is
+        terminated by `data: [DONE]\n\n` immediately after a `done` or `error`
+        event.
+      oneOf:
+        - $ref: "#/components/schemas/SessionStreamDelta"
+        - $ref: "#/components/schemas/SessionStreamToolCall"
+        - $ref: "#/components/schemas/SessionStreamToolResult"
+        - $ref: "#/components/schemas/SessionStreamDone"
+        - $ref: "#/components/schemas/SessionStreamError"
+      discriminator: { propertyName: type }
+
+    SessionStreamDelta:
+      type: object
+      required: [type, delta]
+      description: Incremental text token from the model.
+      properties:
+        type: { type: string, const: delta }
+        delta: { type: string, description: The incremental text content. }
+
+    SessionStreamToolCall:
+      type: object
+      required: [type, id, name, input]
+      description: The model invoked a tool.
+      properties:
+        type: { type: string, const: tool_call }
+        id: { type: string, description: Tool call ID (echoed in the matching tool_result). }
+        name: { type: string, description: Tool name. }
+        input: { type: string, description: Tool input as a JSON string. }
+
+    SessionStreamToolResult:
+      type: object
+      required: [type, id, output, is_error]
+      description: A tool result was returned to the model.
+      properties:
+        type: { type: string, const: tool_result }
+        id: { type: string, description: Tool call ID this result is for. }
+        output: { type: string, description: Tool output (string or JSON). }
+        is_error: { type: boolean, description: True if the tool returned an error. }
+
+    SessionStreamDone:
+      type: object
+      required: [type, status]
+      description: >
+        The prompt turn is complete. `text` is the authoritative final assistant
+        turn text (deltas are display-only; use this for storage).
+      properties:
+        type: { type: string, const: done }
+        status:
+          type: string
+          description: Stop reason (e.g. "complete", "end_turn", "max_tokens").
+        text:
+          type: string
+          description: >
+            Authoritative final-turn text from `Done.final_text`. May be empty
+            on older servers — clients should reconcile against their delta
+            accumulation in that case.
+        usage: { $ref: "#/components/schemas/SessionUsage" }
+
+    SessionStreamError:
+      type: object
+      required: [type, message]
+      description: The model or backend returned an error. The stream closes after this event.
+      properties:
+        type: { type: string, const: error }
+        message: { type: string }
+
+    SessionResumeResponse:
+      type: object
+      required: [messages, tool_calls]
+      description: >
+        Response for `POST /v1/sessions/{id}/resume`. Read-only history
+        rehydration — NOT a prompt. Clients interleave `messages` and
+        `tool_calls` by `created_at` to reconstruct the full turn sequence.
+      properties:
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/SessionMessage" }
+        tool_calls:
+          type: array
+          items: { $ref: "#/components/schemas/SessionToolCall" }
+
+    SessionMessage:
+      type: object
+      required: [role, content, created_at]
+      properties:
+        role: { type: string, enum: [user, assistant] }
+        content: { type: string }
+        images:
+          type: [string, "null"]
+          description: Base64-encoded images attached to this message (if any).
+        created_at: { type: string, description: ISO 8601 creation timestamp. }
+
+    SessionToolCall:
+      type: object
+      required: [id, name, input, output, status, created_at]
+      properties:
+        id: { type: string, description: Tool call ID. }
+        name: { type: string }
+        input: { type: string, description: Tool input as a JSON string. }
+        output: { type: string, description: Tool output as a string. }
+        status: { type: string }
+        created_at: { type: string }
+
+    SessionConnector:
+      type: object
+      description: >
+        A connector attachment included when creating a session (spec §1.4).
+        References a registered connector by `connector_id` and optionally
+        overrides its credentials for this session only.
+      required: [connector_id]
+      properties:
+        connector_id:
+          type: string
+          description: >
+            The connector ID (from `POST /v1/connectors`). Also accepted as
+            `connectorId` (camelCase).
+        bearer:
+          type: [string, "null"]
+          description: >
+            Per-session team bearer override. When set, replaces the
+            connector's stored default bearer for this session only.
+        headers:
+          type: [object, "null"]
+          additionalProperties: { type: string }
+          description: Per-session static header overrides (key → value).
+
+    # ── Connectors ────────────────────────────────────────────────────────────────
+
+    ConnectorAuth:
+      type: object
+      description: >
+        Authentication credentials for a connector. Only `"bearer"` kind is
+        currently supported. The `value` field is **write-only** — it is
+        always omitted from API responses (spec §1.3).
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          const: bearer
+          description: Always "bearer".
+        value:
+          type: string
+          description: >
+            The bearer token value. Write-only: never returned in responses.
+          writeOnly: true
+        per_session:
+          type: [boolean, "null"]
+          description: >
+            When true, the per-session team bearer is used at prompt time;
+            the stored `value` (if any) is an optional fallback.
+
+    ConnectorCreateParams:
+      type: object
+      required: [name, type, url, auth]
+      properties:
+        name:
+          type: string
+          description: Human-readable name for the connector.
+        type:
+          type: string
+          const: mcp
+          description: Connector type — always "mcp".
+        url:
+          type: string
+          description: The MCP endpoint URL (the JSON-RPC POST target).
+        auth: { $ref: "#/components/schemas/ConnectorAuth" }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          description: >
+            Static extra headers sent on every MCP request. Values are
+            stored server-side and redacted (replaced with `"***"`) on read.
+        tool_allowlist:
+          type: array
+          items: { type: string }
+          description: When set, only these tools are exposed to the model.
+        tool_denylist:
+          type: array
+          items: { type: string }
+          description: Listed tools are hidden from the model.
+
+    ConnectorUpdateParams:
+      type: object
+      description: Fields for `PATCH /v1/connectors/{id}` — all optional.
+      properties:
+        name: { type: string }
+        url: { type: string }
+        auth: { $ref: "#/components/schemas/ConnectorAuth" }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+        tool_allowlist:
+          type: array
+          items: { type: string }
+        tool_denylist:
+          type: array
+          items: { type: string }
+
+    Connector:
+      type: object
+      description: >
+        A registered connector (remote-MCP server). Bearer tokens and static
+        header values are always redacted in responses (spec §1.3):
+        `auth.value` is never returned; `headers` values are replaced with
+        `"***"`.
+      required: [id, user_id, name, type, url, auth, created_at, updated_at]
+      properties:
+        id: { type: string }
+        user_id: { type: string }
+        name: { type: string }
+        type: { type: string, const: mcp }
+        url: { type: string }
+        auth:
+          type: object
+          description: >
+            Auth metadata. `value` is never present in responses. `kind` is
+            always "bearer". `per_session` is included if set.
+          required: [kind]
+          properties:
+            kind: { type: string, const: bearer }
+            per_session: { type: [boolean, "null"] }
+        headers:
+          type: [object, "null"]
+          description: >
+            Static header keys present on the connector. Values are always
+            redacted to `"***"` in responses.
+          additionalProperties: { type: string }
+        tool_allowlist:
+          type: [array, "null"]
+          items: { type: string }
+        tool_denylist:
+          type: [array, "null"]
+          items: { type: string }
+        created_at: { type: string }
+        updated_at: { type: string }
+
+    ConnectorList:
+      type: object
+      required: [connectors]
+      properties:
+        connectors:
+          type: array
+          items: { $ref: "#/components/schemas/Connector" }
+
+    ConnectorTestResult:
+      type: object
+      required: [ok]
+      description: >
+        Result of `POST /v1/connectors/{id}/test`. A failed probe is reported
+        as `ok: false` — the HTTP response is still 200. `tool_count` is
+        absent when `ok` is false.
+      properties:
+        ok:
+          type: boolean
+          description: Whether the live tools/list call succeeded.
+        tool_count:
+          type: integer
+          description: Number of tools returned by the MCP server (absent when ok is false).
+        error:
+          type: [string, "null"]
+          description: >
+            Human-readable error when ok is false (e.g. "401 Unauthorized" for
+            auth failures, or a transport error description).
+
+    # ── Memories ──────────────────────────────────────────────────────────────────
+
+    Memory:
+      type: object
+      required: [id, text, created_at]
+      description: A single adaptive memory entry.
+      properties:
+        id: { type: string }
+        text: { type: string }
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+          description: Key-value metadata attached at add time.
+        created_at: { type: string }
+        score:
+          type: [number, "null"]
+          description: Semantic relevance score (only present in search results).
+
+    MemoryList:
+      type: object
+      required: [memories]
+      properties:
+        memories:
+          type: array
+          items: { $ref: "#/components/schemas/Memory" }
+
+    MemoryStats:
+      type: object
+      required: [count]
+      properties:
+        count: { type: integer, description: Total stored memories for the caller. }
+        last_added_at:
+          type: [string, "null"]
+          description: ISO 8601 timestamp of the most recent memory, or null if empty.
+
+    # ── Plugins ───────────────────────────────────────────────────────────────────
+
+    BuiltinTool:
+      type: object
+      description: A built-in tool definition available to the model.
+      properties:
+        name: { type: string }
+        description: { type: string }
+        category: { type: string }
+        parameters:
+          type: [object, "null"]
+          additionalProperties: true
+          description: JSON Schema for the tool's parameters.
+
+    Plugin:
+      type: object
+      description: A user-owned plugin with install status.
+      properties:
+        name: { type: string }
+        kind: { type: string }
+        status: { type: string }
+        configurable: { type: boolean }
+        config_keys: { type: array, items: { type: string } }
+        error: { type: [string, "null"] }
+
+    PluginSurface:
+      type: object
+      required: [tools, plugins]
+      description: Response for `GET /v1/plugins`.
+      properties:
+        tools:
+          type: array
+          items: { $ref: "#/components/schemas/BuiltinTool" }
+        plugins:
+          type: array
+          items: { $ref: "#/components/schemas/Plugin" }
+
+    RegistryEntry:
+      type: object
+      description: A plugin available in the marketplace registry.
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind: { type: string }
+        description: { type: string }
+        version: { type: string }
+        author: { type: string }
+        required_secrets: { type: array, items: { type: string } }
+
+    RegistryCatalog:
+      type: object
+      required: [plugins]
+      properties:
+        plugins:
+          type: array
+          items: { $ref: "#/components/schemas/RegistryEntry" }
+
+    RegistryDetail:
+      type: object
+      required: [plugin_id]
+      properties:
+        plugin_id: { type: string }
+        manifest:
+          description: Plugin manifest (decoded from JSON string by the gateway).
+          type: [object, "null"]
+          additionalProperties: true
+        readme: { type: [string, "null"] }
+
+    InstalledPlugin:
+      type: object
+      properties:
+        plugin_name: { type: string }
+        enabled: { type: boolean }
+        permissions: { type: array, items: { type: string } }
+        updated_at: { type: string }
+
+    InstalledPluginList:
+      type: object
+      required: [installed]
+      properties:
+        installed:
+          type: array
+          items: { $ref: "#/components/schemas/InstalledPlugin" }
+
+    # ── Project management ────────────────────────────────────────────────────────
+
+    TaskCard:
+      type: object
+      required: [taskId]
+      description: A kanban task card.
+      properties:
+        taskId: { type: string }
+        projectId: { type: [string, "null"] }
+        parentTaskId: { type: [string, "null"] }
+        title: { type: string }
+        description: { type: [string, "null"] }
+        status: { type: string, description: "Column status (e.g. todo / in_progress / done)." }
+        priority: { type: [string, "null"] }
+        labels:
+          type: array
+          items: { type: string }
+          description: Label strings (decoded from JSON string by the gateway).
+        checklist:
+          type: array
+          items: { type: object, additionalProperties: true }
+          description: Checklist items (decoded from JSON string by the gateway).
+        sortOrder: { type: [number, "null"] }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+
+    DependencyEdge:
+      type: object
+      required: [taskId, blocksTaskId]
+      properties:
+        taskId: { type: string }
+        blocksTaskId: { type: string }
+
+    Project:
+      type: object
+      required: [projectId, name]
+      properties:
+        projectId: { type: string }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        archived: { type: boolean }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+
+    BoardResponse:
+      type: object
+      required: [tasks, projects, deps]
+      properties:
+        tasks: { type: array, items: { $ref: "#/components/schemas/TaskCard" } }
+        projects: { type: array, items: { $ref: "#/components/schemas/Project" } }
+        deps:
+          type: array
+          items: { $ref: "#/components/schemas/DependencyEdge" }
+          description: Dependency edges (task → blocks-task relationships).
+
+    TaskDetail:
+      type: object
+      required: [subtasks, blocks, blockedBy]
+      properties:
+        task: { $ref: "#/components/schemas/TaskCard" }
+        subtasks:
+          type: array
+          items: { $ref: "#/components/schemas/TaskCard" }
+        blocks:
+          type: array
+          items: { type: string }
+          description: Task IDs that this task blocks.
+        blockedBy:
+          type: array
+          items: { type: string }
+          description: Task IDs that block this task.
+
+    CreateTaskParams:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, maxLength: 2048 }
+        description: { type: string }
+        projectId: { type: string }
+        parentTaskId: { type: string }
+        status: { type: string }
+        priority: { type: string }
+        labels:
+          type: array
+          items: { type: string }
+        labels_json: { type: string, description: Pre-serialised labels JSON (alternative to labels). }
+
+    UpdateTaskParams:
+      type: object
+      properties:
+        title: { type: string }
+        description: { type: string }
+        status: { type: string }
+        priority: { type: string }
+        labels:
+          type: array
+          items: { type: string }
+        labels_json: { type: string }
+        projectId: { type: string }
+
+    Schedule:
+      type: object
+      required: [taskId, name, cronExpr, actionKind, enabled]
+      description: A cron-scheduled task.
+      properties:
+        taskId: { type: string }
+        name: { type: string }
+        cronExpr: { type: string }
+        actionKind: { type: string }
+        actionPayload:
+          type: [object, "null"]
+          additionalProperties: true
+          description: Action payload (decoded from JSON string by the gateway).
+        enabled: { type: boolean }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        lastRunAt: { type: [string, "null"] }
+        nextRunAt: { type: [string, "null"] }
+
+    WorkflowSummary:
+      type: object
+      required: [workflowId, name]
+      properties:
+        workflowId: { type: string }
+        name: { type: string }
+        compileStatus: { type: string }
+        enabled: { type: boolean }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+
+    WorkflowDetail:
+      type: object
+      required: [workflowId, name]
+      properties:
+        workflowId: { type: string }
+        name: { type: string }
+        source: { type: string, description: Workflow source code / definition. }
+        compileStatus: { type: string }
+        enabled: { type: boolean }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+
+    WorkflowRunEvent:
+      type: object
+      properties:
+        seq: { type: integer }
+        ts: { type: string }
+        level: { type: string }
+        message: { type: string }
+
+    WorkflowRun:
+      type: object
+      required: [runId, status, events]
+      properties:
+        runId: { type: string }
+        status: { type: string }
+        startedAt: { type: [string, "null"] }
+        completedAt: { type: [string, "null"] }
+        output:
+          type: [object, "null"]
+          additionalProperties: true
+          description: Workflow output payload (decoded from JSON string by the gateway).
+        error: { type: [string, "null"] }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/WorkflowRunEvent" }
+
+    # ── Errors ────────────────────────────────────────────────────────────────────
+
     AnthropicError:
       type: object
       required: [type, error]
@@ -794,160 +2378,13 @@ components:
                 - api_error
                 - overloaded_error
             message: { type: string }
-    SessionConnector:
-      type: object
-      description: >
-        A connector attachment included when creating a session (spec §1.4).
-        References a registered connector by ``connector_id`` and optionally
-        overrides its credentials for this session only.
-      required: [connector_id]
-      properties:
-        connector_id:
-          type: string
-          description: The connector ID (from ``POST /v1/connectors``).
-        bearer:
-          type: string
-          nullable: true
-          description: >
-            Per-session team bearer override. When set, replaces the connector's
-            stored default bearer for this session.
-        headers:
-          type: object
-          nullable: true
-          additionalProperties:
-            type: string
-          description: Per-session static header overrides (key → value).
-    ConnectorAuth:
-      type: object
-      description: >
-        Authentication credentials for a connector. Only ``"bearer"`` kind is
-        currently supported. The ``value`` field is write-only — it is always
-        omitted / null in API responses (spec §1.3).
-      required: [kind]
-      properties:
-        kind:
-          type: string
-          const: bearer
-          description: Always "bearer".
-        value:
-          type: string
-          nullable: true
-          description: >
-            The bearer token (write-only; never returned by the API).
-        per_session:
-          type: boolean
-          nullable: true
-          description: >
-            When true, the per-session team bearer is used; the stored value
-            (if any) is an optional fallback.
-    ConnectorCreateParams:
-      type: object
-      required: [name, type, url, auth]
-      properties:
-        name:
-          type: string
-          description: A human-readable name for the connector.
-        type:
-          type: string
-          const: mcp
-          description: Connector type — always "mcp".
-        url:
-          type: string
-          description: The MCP endpoint URL (the JSON-RPC POST target).
-        auth:
-          $ref: "#/components/schemas/ConnectorAuth"
-        headers:
-          type: object
-          additionalProperties:
-            type: string
-          description: Static extra headers sent on every MCP request (values redacted on read).
-        tool_allowlist:
-          type: array
-          items: { type: string }
-          description: When set, only these tools are exposed to the model.
-        tool_denylist:
-          type: array
-          items: { type: string }
-          description: Listed tools are hidden from the model.
-    ConnectorUpdateParams:
-      type: object
-      description: Fields for PATCH /v1/connectors/{id} — all optional.
-      properties:
-        name: { type: string }
-        url: { type: string }
-        auth: { $ref: "#/components/schemas/ConnectorAuth" }
-        headers:
-          type: object
-          additionalProperties: { type: string }
-        tool_allowlist:
-          type: array
-          items: { type: string }
-        tool_denylist:
-          type: array
-          items: { type: string }
-    Connector:
-      type: object
-      description: >
-        A registered connector (remote-MCP server). Bearer tokens and static
-        header values are always redacted in responses (spec §1.3).
-      required: [id, user_id, name, type, url, created_at, updated_at]
-      properties:
-        id: { type: string }
-        user_id: { type: string }
-        name: { type: string }
-        type: { type: string, const: mcp }
-        url: { type: string }
-        auth:
-          type: object
-          nullable: true
-          description: Auth metadata (value always omitted — redacted).
-          properties:
-            kind: { type: string }
-            per_session: { type: boolean, nullable: true }
-        headers:
-          type: object
-          nullable: true
-          description: Header keys present (values redacted).
-          additionalProperties: { type: string }
-        tool_allowlist:
-          type: array
-          nullable: true
-          items: { type: string }
-        tool_denylist:
-          type: array
-          nullable: true
-          items: { type: string }
-        created_at: { type: string }
-        updated_at: { type: string }
-    ConnectorList:
-      type: object
-      required: [connectors]
-      properties:
-        connectors:
-          type: array
-          items: { $ref: "#/components/schemas/Connector" }
-    ConnectorTestResult:
-      type: object
-      required: [ok, tool_count]
-      description: >
-        Result of POST /v1/connectors/{id}/test. A failed probe is reported as
-        ``ok: false`` — the HTTP response is still 200.
-      properties:
-        ok:
-          type: boolean
-          description: Whether the live tools/list call succeeded.
-        tool_count:
-          type: integer
-          description: Number of tools returned by the MCP server (0 when ok is false).
-        error:
-          type: string
-          nullable: true
-          description: >
-            Human-readable error when ok is false (e.g. "401 Unauthorized" for auth
-            failures, or a transport error description).
+
     LegacyError:
       type: object
       required: [error]
+      description: >
+        Platform-surface error envelope. SDKs should parse both this and
+        `AnthropicError` (prefer `error.type`, fall back to `error.code`).
       properties:
         error:
           type: object

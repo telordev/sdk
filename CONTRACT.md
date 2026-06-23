@@ -219,8 +219,11 @@ the orchestrator). Distinct from the stateless Messages API.
     `{"type":"done","status","text","usage":{"input_tokens","output_tokens"}}`, `{"type":"error","message"}`
 
   Usage is Anthropic-style `input_tokens`/`output_tokens` (no `total_tokens` — compute client-side). The OpenAI-shaped `/v1/chat/completions` endpoint does **not** exist; the only raw-inference surface is the Anthropic `/v1/messages` above.
-- `POST /v1/sessions/{id}/resume` → resumes with history
-- `POST /v1/sessions/{id}/abort` → cancels an in-flight prompt
+- `POST /v1/sessions/{id}/resume` → **read-only rehydration** (NOT a prompt):
+  `{"messages":[{"role":"user"|"assistant","content":"...","images":null,"created_at":"..."},...],"tool_calls":[{"id":"...","name":"...","input":"...","output":"...","status":"...","created_at":"..."},...]}`.
+  Clients interleave both arrays by `created_at` to reconstruct the full turn sequence.
+- `POST /v1/sessions/{id}/abort` → cancels an in-flight prompt:
+  `{"aborted":true,"id":"<session-id>"}`. Returns 200 even when no prompt is in flight.
 
 ---
 
@@ -253,7 +256,8 @@ Static `headers` values are also redacted in responses (only keys are echoed).
 - `GET /v1/connectors/{id}` → `Connector` (secrets redacted)
 - `PATCH /v1/connectors/{id}` `{name?, url?, auth?, headers?, tool_allowlist?, tool_denylist?}` → `Connector`
 - `DELETE /v1/connectors/{id}` → `{"deleted":true,"id":"..."}`
-- `POST /v1/connectors/{id}/test` → `{"ok":bool,"tool_count":int,"error"?:"string"}`
+- `POST /v1/connectors/{id}/test` `{bearer?,headers?}` (body optional) → `{"ok":bool,"tool_count":int,"error"?:"string"}`
+  - Optional `bearer` and `headers` override the stored credentials for this test only.
 
 The `/test` endpoint performs a live `tools/list` probe against the MCP server.
 A failed probe (auth or transport) is reported as `ok: false` — the HTTP
@@ -283,36 +287,142 @@ deleted; fix the credentials and test again.
 
 ## 8. Memories API
 
-- `GET /v1/memories` → `{"memories":[...]}`
-- `POST /v1/memories` `{content, ...}` → created memory
-- `DELETE /v1/memories/{id}` → `{}`
-- `GET /v1/memories/stats` → stats object
+User-scoped; the gateway forces the scope to the authenticated key's user.
+Backed by `foundry.adaptive.AdaptiveService` (quill).
 
-(User-scoped; the gateway forces the scope to the authenticated key's user.)
+### Endpoints
+
+- `GET /v1/memories?query=<text>&limit=<N>` → `{"memories":[Memory, ...]}`
+  - Without `query`: returns memories in recency order (`memory_list` RPC).
+  - With `query`: performs semantic search (`memory_search` RPC); results include `score`.
+- `POST /v1/memories` `{"text":"...","metadata":{"key":"val"}}` → **201** `{"id":"mem_..."}`
+  - **Field is `text`, not `content`**.
+- `DELETE /v1/memories/{id}` → `{"ok":true|false}`
+- `GET /v1/memories/stats` → `{"count":N,"last_added_at":"2026-06-23T…Z"|null}`
+
+### `Memory` object
+
+```json
+{ "id": "mem_...", "text": "...", "metadata": {"key":"val"}, "created_at": "2026-06-23T00:00:00Z", "score": 0.92 }
+```
+
+`score` is only present in search results.
 
 ---
 
 ## 9. Plugins / marketplace API
 
-- `GET /v1/plugins` → installed tools + plugins
-- `GET /v1/plugins/registry` → marketplace listing
-- `GET /v1/plugins/registry/{id}` → one registry entry
-- `GET /v1/plugins/installed` → installed plugins
-- `POST /v1/plugins/install` `{id, ...}` → result
-- `POST /v1/plugins/uninstall` `{id}` → result
+Backed by `foundry.quiver.RegistryService` (quiver).
+
+### Endpoints
+
+- `GET /v1/plugins` → `{"tools":[BuiltinTool,...],"plugins":[Plugin,...]}`
+  - `tools` = built-in tool defs available to the model.
+  - `plugins` = the caller's installed plugin list with status.
+- `GET /v1/plugins/registry` → `{"plugins":[RegistryEntry,...]}`  (marketplace catalog)
+- `GET /v1/plugins/registry/{id}` → `{"plugin_id":"...","manifest":{...},"readme":"..."}`
+- `GET /v1/plugins/installed` → `{"installed":[InstalledPlugin,...]}`
+- `POST /v1/plugins/install` `{"plugin_name":"...","permissions":["..."],"secrets":{"key":"val"}}` → `{"installed":true}`
+  - **Field is `plugin_name`, not `id`**.
+- `POST /v1/plugins/uninstall` `{"plugin_name":"..."}` → `{"uninstalled":true}`
+  - **Field is `plugin_name`, not `id`**.
+
+### Key object shapes
+
+```json
+// BuiltinTool
+{ "name": "read_file", "description": "...", "category": "fs", "parameters": {} }
+
+// Plugin (installed, with status)
+{ "name": "my-plugin", "kind": "wasm", "status": "active", "configurable": true, "config_keys": ["API_KEY"], "error": null }
+
+// RegistryEntry
+{ "id": "pkg/my-plugin", "name": "my-plugin", "kind": "wasm", "description": "...", "version": "1.0.0", "author": "acme", "required_secrets": ["API_KEY"] }
+
+// InstalledPlugin
+{ "plugin_name": "my-plugin", "enabled": true, "permissions": ["fs:read"], "updated_at": "2026-06-23T00:00:00Z" }
+```
 
 ---
 
-## 10. Project-management API (session-scoped)
+## 10. Project-management API
 
-- Tasks: `GET/POST /v1/sessions/{id}/tasks`, `GET/PATCH/DELETE /v1/sessions/{id}/tasks/{task_id}`,
-  `POST .../move`, `PUT .../checklist`, `POST .../deps`, `DELETE .../deps/{blocks_task_id}`
-- Projects: `GET/POST /v1/sessions/{id}/projects`, `PATCH/DELETE /v1/sessions/{id}/projects/{project_id}`
-- Todos (read-only): `GET /v1/sessions/{id}/todos`
-- Schedules: `GET/POST /v1/schedules`, `PATCH/DELETE /v1/schedules/{task_id}`
-- Workflows: `GET/POST /v1/workflows`, `GET/PATCH/DELETE /v1/workflows/{workflow_id}`,
-  `POST /v1/workflows/lint`, `POST /v1/workflows/{workflow_id}/run`,
-  `GET /v1/workflows/runs/{run_id}`, `POST /v1/workflows/runs/{run_id}/cancel`
+Backed by `foundry.slate.PmService` (slate). Tasks and Projects are
+session-scoped. Schedules and Workflows are user-scoped.
+
+### Kanban tasks (session-scoped)
+
+- `GET /v1/sessions/{id}/tasks?project_id=<opt>` → `{"tasks":[TaskCard,...],"projects":[Project,...],"deps":[DependencyEdge,...]}`
+- `POST /v1/sessions/{id}/tasks` `{title,description?,projectId?,parentTaskId?,status?,priority?,labels?}` → **201** `{"taskId":"..."}`
+- `GET /v1/sessions/{id}/tasks/{task_id}` → `{"task":TaskCard,"subtasks":[TaskCard,...],"blocks":["tid",...],"blockedBy":["tid",...]}`
+- `PATCH /v1/sessions/{id}/tasks/{task_id}` `{title?,description?,status?,priority?,labels?,projectId?}` → `{"ok":true}`
+- `DELETE /v1/sessions/{id}/tasks/{task_id}` → `{"deleted":true}`
+- `POST /v1/sessions/{id}/tasks/{task_id}/move` `{status,sortOrder?}` → `{"ok":true}`
+- `PUT /v1/sessions/{id}/tasks/{task_id}/checklist` `{checklist:[...]}` → `{"ok":true}`
+- `POST /v1/sessions/{id}/tasks/{task_id}/deps` `{blocksTaskId:"..."}` → `{"ok":true}`
+- `DELETE /v1/sessions/{id}/tasks/{task_id}/deps/{blocks_task_id}` → `{"ok":true}`
+
+### Projects (session-scoped)
+
+- `GET /v1/sessions/{id}/projects` → `{"projects":[Project,...]}`
+- `POST /v1/sessions/{id}/projects` `{name,description?}` → **201** `{"projectId":"..."}`
+- `PATCH /v1/sessions/{id}/projects/{project_id}` `{name?,description?,archived?}` → `{"ok":true}`
+- `DELETE /v1/sessions/{id}/projects/{project_id}` → `{"deleted":true}`
+
+### Todos (session-scoped, read-only)
+
+- `GET /v1/sessions/{id}/todos` → `{"todos":[...]}` (model-managed; opaque object array)
+
+### Schedules (user-scoped)
+
+- `GET /v1/schedules` → `{"schedules":[Schedule,...]}`
+- `POST /v1/schedules` `{name,cronExpr,actionKind,actionPayload?}` → **201** `{"taskId":"..."}`
+- `PATCH /v1/schedules/{task_id}` `{enabled?,cronExpr?}` → `{"updated":true}`
+- `DELETE /v1/schedules/{task_id}` → `{"deleted":true}`
+
+### Workflows (user-scoped)
+
+- `GET /v1/workflows` → `{"workflows":[WorkflowSummary,...]}`
+- `POST /v1/workflows` `{name,source}` → **201** `{"workflowId":"..."}`
+- `GET /v1/workflows/{workflow_id}` → `WorkflowDetail` (includes `source`)
+- `PATCH /v1/workflows/{workflow_id}` `{name?,source?,enabled?}` → `{"ok":true}`
+- `DELETE /v1/workflows/{workflow_id}` → `{"deleted":true}`
+- `POST /v1/workflows/lint` `{source}` → `{"ok":bool,"errors":["..."]}`
+- `POST /v1/workflows/{workflow_id}/run` `{input?,trigger?}` → `{"runId":"...","status":"..."}`
+- `GET /v1/workflows/runs/{run_id}` → `WorkflowRun` (status + output + event log)
+- `POST /v1/workflows/runs/{run_id}/cancel` → `{"cancelled":true}`
+
+### Key object shapes
+
+```json
+// TaskCard
+{ "taskId":"t_...","projectId":null,"parentTaskId":null,"title":"Fix bug",
+  "description":null,"status":"todo","priority":"high","labels":[],"checklist":[],
+  "sortOrder":1.0,"createdAt":"2026-06-23T00:00:00Z","updatedAt":"2026-06-23T00:00:00Z" }
+
+// Project
+{ "projectId":"p_...","name":"Sprint 1","description":null,"archived":false,
+  "createdAt":"...","updatedAt":"..." }
+
+// DependencyEdge
+{ "taskId":"t_a","blocksTaskId":"t_b" }
+
+// Schedule
+{ "taskId":"s_...","name":"Daily standup","cronExpr":"0 9 * * 1-5",
+  "actionKind":"prompt","actionPayload":{"content":"Run standup"},"enabled":true,
+  "createdAt":"...","updatedAt":"...","lastRunAt":null,"nextRunAt":"..." }
+
+// WorkflowSummary
+{ "workflowId":"wf_...","name":"CI pipeline","compileStatus":"ok","enabled":true,
+  "createdAt":"...","updatedAt":"..." }
+
+// WorkflowDetail adds:  "source": "<workflow dsl>"
+
+// WorkflowRun
+{ "runId":"run_...","status":"completed","startedAt":"...","completedAt":"...",
+  "output":{"result":"ok"},"error":null,
+  "events":[{"seq":1,"ts":"...","level":"info","message":"Step 1 complete"}] }
+```
 
 ---
 
