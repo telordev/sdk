@@ -21,6 +21,7 @@ tags:
   - name: Models
   - name: Account
   - name: Sessions
+  - name: Connectors
   - name: Memories
   - name: Plugins
   - name: ProjectManagement
@@ -344,6 +345,99 @@ paths:
       operationId: abortSession
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses: { "200": { description: Aborted. } }
+
+  /v1/connectors:
+    post:
+      tags: [Connectors]
+      operationId: createConnector
+      summary: Register a remote-MCP connector.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConnectorCreateParams" }
+      responses:
+        "201":
+          description: Connector created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Connector" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+        "400": { $ref: "#/components/responses/LegacyError" }
+    get:
+      tags: [Connectors]
+      operationId: listConnectors
+      summary: List connectors (secrets redacted).
+      responses:
+        "200":
+          description: Connectors.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConnectorList" }
+        "401": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/connectors/{id}:
+    get:
+      tags: [Connectors]
+      operationId: getConnector
+      summary: Get one connector (secrets redacted).
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Connector.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Connector" }
+        "404": { $ref: "#/components/responses/LegacyError" }
+    patch:
+      tags: [Connectors]
+      operationId: updateConnector
+      summary: Partially update a connector.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConnectorUpdateParams" }
+      responses:
+        "200":
+          description: Updated connector.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Connector" }
+        "404": { $ref: "#/components/responses/LegacyError" }
+    delete:
+      tags: [Connectors]
+      operationId: deleteConnector
+      summary: Delete a connector.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: boolean }
+                  id: { type: string }
+        "404": { $ref: "#/components/responses/LegacyError" }
+
+  /v1/connectors/{id}/test:
+    post:
+      tags: [Connectors]
+      operationId: testConnector
+      summary: Probe the MCP server with a live tools/list call.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: |
+            Test result. A failed probe (`ok: false`) is still a 200 response —
+            the failure is reported in-band, not as an HTTP error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConnectorTestResult" }
+        "404": { $ref: "#/components/responses/LegacyError" }
 
   /v1/memories:
     get:
@@ -692,6 +786,134 @@ components:
                 - api_error
                 - overloaded_error
             message: { type: string }
+    ConnectorAuth:
+      type: object
+      description: >
+        Authentication credentials for a connector. Only ``"bearer"`` kind is
+        currently supported. The ``value`` field is write-only — it is always
+        omitted / null in API responses (spec §1.3).
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          const: bearer
+          description: Always "bearer".
+        value:
+          type: string
+          nullable: true
+          description: >
+            The bearer token (write-only; never returned by the API).
+        per_session:
+          type: boolean
+          nullable: true
+          description: >
+            When true, the per-session team bearer is used; the stored value
+            (if any) is an optional fallback.
+    ConnectorCreateParams:
+      type: object
+      required: [name, type, url, auth]
+      properties:
+        name:
+          type: string
+          description: A human-readable name for the connector.
+        type:
+          type: string
+          const: mcp
+          description: Connector type — always "mcp".
+        url:
+          type: string
+          description: The MCP endpoint URL (the JSON-RPC POST target).
+        auth:
+          $ref: "#/components/schemas/ConnectorAuth"
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Static extra headers sent on every MCP request (values redacted on read).
+        tool_allowlist:
+          type: array
+          items: { type: string }
+          description: When set, only these tools are exposed to the model.
+        tool_denylist:
+          type: array
+          items: { type: string }
+          description: Listed tools are hidden from the model.
+    ConnectorUpdateParams:
+      type: object
+      description: Fields for PATCH /v1/connectors/{id} — all optional.
+      properties:
+        name: { type: string }
+        url: { type: string }
+        auth: { $ref: "#/components/schemas/ConnectorAuth" }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+        tool_allowlist:
+          type: array
+          items: { type: string }
+        tool_denylist:
+          type: array
+          items: { type: string }
+    Connector:
+      type: object
+      description: >
+        A registered connector (remote-MCP server). Bearer tokens and static
+        header values are always redacted in responses (spec §1.3).
+      required: [id, user_id, name, type, url, created_at, updated_at]
+      properties:
+        id: { type: string }
+        user_id: { type: string }
+        name: { type: string }
+        type: { type: string, const: mcp }
+        url: { type: string }
+        auth:
+          type: object
+          nullable: true
+          description: Auth metadata (value always omitted — redacted).
+          properties:
+            kind: { type: string }
+            per_session: { type: boolean, nullable: true }
+        headers:
+          type: object
+          nullable: true
+          description: Header keys present (values redacted).
+          additionalProperties: { type: string }
+        tool_allowlist:
+          type: array
+          nullable: true
+          items: { type: string }
+        tool_denylist:
+          type: array
+          nullable: true
+          items: { type: string }
+        created_at: { type: string }
+        updated_at: { type: string }
+    ConnectorList:
+      type: object
+      required: [connectors]
+      properties:
+        connectors:
+          type: array
+          items: { $ref: "#/components/schemas/Connector" }
+    ConnectorTestResult:
+      type: object
+      required: [ok, tool_count]
+      description: >
+        Result of POST /v1/connectors/{id}/test. A failed probe is reported as
+        ``ok: false`` — the HTTP response is still 200.
+      properties:
+        ok:
+          type: boolean
+          description: Whether the live tools/list call succeeded.
+        tool_count:
+          type: integer
+          description: Number of tools returned by the MCP server (0 when ok is false).
+        error:
+          type: string
+          nullable: true
+          description: >
+            Human-readable error when ok is false (e.g. "401 Unauthorized" for auth
+            failures, or a transport error description).
     LegacyError:
       type: object
       required: [error]

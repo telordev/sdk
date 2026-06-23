@@ -219,7 +219,64 @@ the orchestrator). Distinct from the stateless Messages API.
 
 ---
 
-## 7. Memories API
+## 7. Connectors API (spec §1)
+
+A connector registers a remote-MCP server and makes its tools available to the
+server-side agentic loop when attached to a session. The connector CRUD surface
+is user-scoped (the gateway forces the scope to the authenticated key's user).
+
+### Auth shape (`ConnectorAuth`)
+
+All three SDKs and the openapi.yaml use a nested `auth` object:
+
+```json
+{ "kind": "bearer", "value": "tok_...", "per_session": false }
+```
+
+- `kind` — always `"bearer"` (only kind currently supported).
+- `value` — the bearer token value. **Write-only**: always omitted / null in API
+  responses (spec §1.3 — the gateway redacts it server-side).
+- `per_session` — when `true`, the per-session team bearer supplied at session
+  prompt time is used; the stored `value` is an optional fallback.
+
+Static `headers` values are also redacted in responses (only keys are echoed).
+
+### Endpoints
+
+- `POST /v1/connectors` `{name, type:"mcp", url, auth:{kind:"bearer", value?, per_session?}, headers?, tool_allowlist?, tool_denylist?}` → `201 Connector`
+- `GET /v1/connectors` → `{"connectors":[Connector, ...]}`
+- `GET /v1/connectors/{id}` → `Connector` (secrets redacted)
+- `PATCH /v1/connectors/{id}` `{name?, url?, auth?, headers?, tool_allowlist?, tool_denylist?}` → `Connector`
+- `DELETE /v1/connectors/{id}` → `{"deleted":true,"id":"..."}`
+- `POST /v1/connectors/{id}/test` → `{"ok":bool,"tool_count":int,"error"?:"string"}`
+
+The `/test` endpoint performs a live `tools/list` probe against the MCP server.
+A failed probe (auth or transport) is reported as `ok: false` — the HTTP
+response is still 200. `ok: false` does NOT mean the connector record was
+deleted; fix the credentials and test again.
+
+### `Connector` response shape
+
+```json
+{
+  "id": "conn_...",
+  "user_id": "...",
+  "name": "My MCP",
+  "type": "mcp",
+  "url": "https://my-mcp-server.example.com/mcp",
+  "auth": { "kind": "bearer" },
+  "tool_allowlist": null,
+  "tool_denylist": null,
+  "created_at": "2026-06-23T00:00:00Z",
+  "updated_at": "2026-06-23T00:00:00Z"
+}
+```
+
+`auth.value` and all `headers` values are always omitted from responses.
+
+---
+
+## 8. Memories API
 
 - `GET /v1/memories` → `{"memories":[...]}`
 - `POST /v1/memories` `{content, ...}` → created memory
@@ -230,7 +287,7 @@ the orchestrator). Distinct from the stateless Messages API.
 
 ---
 
-## 8. Plugins / marketplace API
+## 9. Plugins / marketplace API
 
 - `GET /v1/plugins` → installed tools + plugins
 - `GET /v1/plugins/registry` → marketplace listing
@@ -241,7 +298,7 @@ the orchestrator). Distinct from the stateless Messages API.
 
 ---
 
-## 9. Project-management API (session-scoped)
+## 10. Project-management API (session-scoped)
 
 - Tasks: `GET/POST /v1/sessions/{id}/tasks`, `GET/PATCH/DELETE /v1/sessions/{id}/tasks/{task_id}`,
   `POST .../move`, `PUT .../checklist`, `POST .../deps`, `DELETE .../deps/{blocks_task_id}`
@@ -254,13 +311,13 @@ the orchestrator). Distinct from the stateless Messages API.
 
 ---
 
-## 10. Feature flags
+## 11. Feature flags
 
 - `GET /v1/flags` → `{"flags":{"v1.chat":true, ...}}` (which features the key may use)
 
 ---
 
-## SDK design requirements (all three languages)
+## 12. SDK design requirements (all three languages)
 
 1. **Client construction** with `api_key` (default from `SIMSE_API_KEY` /
    `ANTHROPIC_API_KEY` env), `base_url` (default `https://api.simse.dev`,
@@ -268,8 +325,9 @@ the orchestrator). Distinct from the stateless Messages API.
 2. **Resource namespaces:** `messages` (`.create`, `.stream`, `.count_tokens`),
    `models` (`.list`, `.retrieve`), `account`, `usage`, `billing`, `sessions`
    (`.create`, `.list`, `.retrieve`, `.delete`, `.prompt`/`.stream`, `.resume`,
-   `.abort`), `memories`, `plugins`, `pm` (tasks/projects/todos/schedules/
-   workflows), `flags`.
+   `.abort`), `connectors` (`.create`, `.list`, `.retrieve`, `.update`,
+   `.delete`, `.test`), `memories`, `plugins`, `pm` (tasks/projects/todos/
+   schedules/workflows), `flags`.
 3. **Streaming helpers:** `messages.stream(...)` yields typed events and
    accumulates a final `Message` (expose `.text_stream` / `.on("text")` /
    `finalMessage()` idioms per language).
