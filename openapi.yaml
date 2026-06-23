@@ -245,6 +245,18 @@ paths:
               properties:
                 model: { type: string }
                 title: { type: string }
+                system:
+                  type: string
+                  description: >
+                    Per-session system prompt (persona + guardrails). Injected
+                    into every prompt turn and resume for this session (spec §2.2).
+                metadata:
+                  type: object
+                  description: >
+                    Arbitrary key-value metadata attached to the session
+                    (e.g. {"team":"eng","role":"runner"}).
+                  additionalProperties:
+                    type: string
       responses:
         "200":
           description: Session.
@@ -649,6 +661,15 @@ components:
         message_count: { type: integer }
         created_at: { type: string }
         updated_at: { type: string }
+        system:
+          type: string
+          nullable: true
+          description: Per-session system prompt, if set.
+        metadata:
+          type: object
+          nullable: true
+          additionalProperties: { type: string }
+          description: Key-value metadata attached to the session, if set.
     AnthropicError:
       type: object
       required: [type, error]

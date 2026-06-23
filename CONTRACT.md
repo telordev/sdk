@@ -200,7 +200,9 @@ Returns a single `Model` object, or `404 not_found_error`.
 A session is a persisted, model-driven conversation (the agent reaches tools via
 the orchestrator). Distinct from the stateless Messages API.
 
-- `POST /v1/sessions` `{model?, title?}` → `{"id","model","status":"active","created_at"}`
+- `POST /v1/sessions` `{model?, title?, system?, metadata?}` → `{"id","model","status":"active","created_at"}`
+  - `system` (string, optional) — per-session system prompt (persona + guardrails); injected into every prompt turn and resume for this session (spec §2.2). Omitted from the wire when `null`.
+  - `metadata` (object `{[key:string]:string}`, optional) — arbitrary key-value metadata (e.g. `{"team":"eng","role":"runner"}`). Omitted from the wire when `null`.
 - `GET /v1/sessions` → `{"sessions":[{"id","title","message_count","created_at","updated_at","status"}]}`
 - `GET /v1/sessions/{id}` → session object
 - `DELETE /v1/sessions/{id}` → `{}`
