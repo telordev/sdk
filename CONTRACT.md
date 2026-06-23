@@ -68,12 +68,9 @@ Errors for the Messages/Models surfaces use the **Anthropic error envelope**:
 | 401  | `authentication_error`  | Missing/invalid API key.                 |
 | 403  | `permission_error`      | Key lacks permission.                    |
 | 404  | `not_found_error`       | Resource not found.                      |
-| 409  | `api_error`             | Conflict (e.g. concurrent update). **Retried** by the SDKs (see below). |
 | 413  | `request_too_large`     | Body exceeds the size limit.             |
-| 422  | `api_error`             | Unprocessable entity (semantically invalid). Not retried. |
 | 429  | `rate_limit_error`      | Rate limit hit — see `retry-after`.      |
 | 500  | `api_error`             | Internal error.                          |
-| 502  | `api_error`             | Upstream/gateway failure (a non-`Unavailable` downstream error maps to `502 bad_gateway`). Retryable as ≥500. |
 | 503  | `overloaded_error`      | Backend unavailable/overloaded (retry).  |
 
 The platform/dashboard surfaces (`/v1/sessions`, `/v1/memories`, `/v1/plugins`,
@@ -83,14 +80,12 @@ fall back to `error.code`).
 
 **SDK error classes** (mirror Anthropic): `APIError` (base, has `.status`,
 `.requestId`, `.type`) → `BadRequestError` (400), `AuthenticationError` (401),
-`PermissionDeniedError` (403), `NotFoundError` (404), `ConflictError` (409),
-`RequestTooLargeError` (413), `UnprocessableEntityError` (422),
-`RateLimitError` (429), `InternalServerError` (500), `OverloadedError`
+`PermissionDeniedError` (403), `NotFoundError` (404), `RequestTooLargeError`
+(413), `RateLimitError` (429), `InternalServerError` (500), `OverloadedError`
 (503), plus `APIConnectionError` / `APITimeoutError` for transport failures.
 
 **Retries:** retry on `408`, `409`, `429`, and `≥500` with exponential backoff
-(default `max_retries = 2`; honor `retry-after`). `409` (conflict) is retried;
-`422` (unprocessable entity) is not. Do not retry other 4xx.
+(default `max_retries = 2`; honor `retry-after`). Do not retry other 4xx.
 
 ---
 
@@ -120,9 +115,6 @@ fall back to `error.code`).
 - `{"type":"image","source":{"type":"base64","media_type":"image/png","data":"<b64>"}}`
 - `{"type":"tool_use","id":"toolu_...","name":"...","input":{...}}` (echo assistant turn)
 - `{"type":"tool_result","tool_use_id":"toolu_...","content": string | Block[], "is_error"?: bool}`
-- `{"type":"thinking","thinking":"..."}` (echo a prior assistant thinking turn; the
-  gateway accepts it and echoes the text back into the prompt context). Note: a
-  `{"type":"redacted_thinking",...}` block is currently dropped (ignored).
 
 **Response — `Message` object (non-stream):**
 
@@ -148,17 +140,14 @@ fall back to `error.code`).
 `event: <type>\ndata: <json>\n\n`, in order:
 
 1. `message_start` — `{"type":"message_start","message":{...Message with empty content, usage.input_tokens}}`
-2. `ping` — `{"type":"ping"}`
-3. `content_block_start` — `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
+2. `content_block_start` — `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
+3. `ping` — `{"type":"ping"}`
 4. `content_block_delta` (repeated) — `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"..."}}`
    - tool args stream as `{"type":"input_json_delta","partial_json":"..."}` on a `tool_use` block.
 5. `content_block_stop` — `{"type":"content_block_stop","index":0}`
 6. `message_delta` — `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":34}}`
 7. `message_stop` — `{"type":"message_stop"}`
 8. mid-stream errors: `event: error\ndata: {"type":"error","error":{"type":"...","message":"..."}}`
-
-The `ping` is emitted immediately after `message_start`, before the first
-`content_block_start` (matching the Anthropic wire and warp's actual emission).
 
 `message_start.usage.input_tokens` is an estimate; `message_delta.usage.output_tokens`
 is authoritative. The SDK streaming helper **accumulates** events into a final
@@ -211,9 +200,17 @@ Returns a single `Model` object, or `404 not_found_error`.
 A session is a persisted, model-driven conversation (the agent reaches tools via
 the orchestrator). Distinct from the stateless Messages API.
 
-- `POST /v1/sessions` `{model?, title?}` → `{"id","model","status":"active","created_at"}`
+- `POST /v1/sessions` `{model?, title?, system?, metadata?, connectors?}` → `{"id","model","status":"active","created_at"}`
+  - `system` (string, optional) — per-session system prompt (persona + guardrails); injected into every prompt turn and resume for this session (spec §2.2). Omitted from the wire when `null`.
+  - `metadata` (object `{[key:string]:string}`, optional) — arbitrary key-value metadata (e.g. `{"team":"eng","role":"runner"}`). Omitted from the wire when `null`.
+  - `connectors` (array of `SessionConnector`, optional) — connectors to attach to the new session (spec §1.4). Each entry:
+    - `connector_id` (string, **required**) — references a registered connector (`POST /v1/connectors`).
+    - `bearer` (string, optional) — per-session team bearer override; replaces the connector's stored default bearer for this session only.
+    - `headers` (object `{[key:string]:string}`, optional) — per-session static header overrides.
+    Omitted from the wire body when absent.
 - `GET /v1/sessions` → `{"sessions":[{"id","title","message_count","created_at","updated_at","status"}]}`
-- `GET /v1/sessions/{id}` → session object
+  - List items do **not** include `system` or `metadata` (the list query omits these fields for performance).
+- `GET /v1/sessions/{id}` → session object including `system` (string | null) and `metadata` (object | null) when set at create time
 - `DELETE /v1/sessions/{id}` → `{}`
 - `POST /v1/sessions/{id}/messages` `{content, stream?}`
   - non-stream → `{"message":{"role":"assistant","content":"..."},"usage":{"input_tokens","output_tokens"}}`
@@ -223,53 +220,220 @@ the orchestrator). Distinct from the stateless Messages API.
     `{"type":"done","status","text","usage":{"input_tokens","output_tokens"}}`, `{"type":"error","message"}`
 
   Usage is Anthropic-style `input_tokens`/`output_tokens` (no `total_tokens` — compute client-side). The OpenAI-shaped `/v1/chat/completions` endpoint does **not** exist; the only raw-inference surface is the Anthropic `/v1/messages` above.
-- `POST /v1/sessions/{id}/resume` → resumes with history
-- `POST /v1/sessions/{id}/abort` → cancels an in-flight prompt
+- `POST /v1/sessions/{id}/resume` → **read-only rehydration** (NOT a prompt):
+  `{"messages":[{"role":"user"|"assistant","content":"...","images":null,"created_at":"..."},...],"tool_calls":[{"id":"...","name":"...","input":"...","output":"...","status":"...","created_at":"..."},...]}`.
+  Clients interleave both arrays by `created_at` to reconstruct the full turn sequence.
+- `POST /v1/sessions/{id}/abort` → cancels an in-flight prompt:
+  `{"aborted":true,"id":"<session-id>"}`. Returns 200 even when no prompt is in flight.
 
 ---
 
-## 7. Memories API
+## 7. Connectors API (spec §1)
 
-- `GET /v1/memories` → `{"memories":[...]}`
-- `POST /v1/memories` `{text, metadata?}` → created memory
-- `DELETE /v1/memories/{id}` → `{}`
-- `GET /v1/memories/stats` → stats object
+A connector registers a remote-MCP server and makes its tools available to the
+server-side agentic loop when attached to a session. The connector CRUD surface
+is user-scoped (the gateway forces the scope to the authenticated key's user).
 
-(User-scoped; the gateway forces the scope to the authenticated key's user.)
+### Auth shape (`ConnectorAuth`)
+
+All three SDKs and the openapi.yaml use a nested `auth` object:
+
+```json
+{ "kind": "bearer", "value": "tok_...", "per_session": false }
+```
+
+- `kind` — always `"bearer"` (only kind currently supported).
+- `value` — the bearer token value. **Write-only**: always omitted / null in API
+  responses (spec §1.3 — the gateway redacts it server-side).
+- `per_session` — when `true`, the per-session team bearer supplied at session
+  prompt time is used; the stored `value` is an optional fallback.
+
+Static `headers` values are also redacted in responses (only keys are echoed).
+
+### Endpoints
+
+- `POST /v1/connectors` `{name, type:"mcp", url, auth:{kind:"bearer", value?, per_session?}, headers?, tool_allowlist?, tool_denylist?}` → `201 Connector`
+- `GET /v1/connectors` → `{"connectors":[Connector, ...]}`
+- `GET /v1/connectors/{id}` → `Connector` (secrets redacted)
+- `PATCH /v1/connectors/{id}` `{name?, url?, auth?, headers?, tool_allowlist?, tool_denylist?}` → `Connector`
+- `DELETE /v1/connectors/{id}` → `{"deleted":true,"id":"..."}`
+- `POST /v1/connectors/{id}/test` `{bearer?,headers?}` (body optional) → `{"ok":bool,"tool_count":int,"error"?:"string"}`
+  - Optional `bearer` and `headers` override the stored credentials for this test only.
+
+The `/test` endpoint performs a live `tools/list` probe against the MCP server.
+A failed probe (auth or transport) is reported as `ok: false` — the HTTP
+response is still 200. `ok: false` does NOT mean the connector record was
+deleted; fix the credentials and test again.
+
+### `Connector` response shape
+
+```json
+{
+  "id": "conn_...",
+  "user_id": "...",
+  "name": "My MCP",
+  "type": "mcp",
+  "url": "https://my-mcp-server.example.com/mcp",
+  "auth": { "kind": "bearer" },
+  "tool_allowlist": null,
+  "tool_denylist": null,
+  "created_at": "2026-06-23T00:00:00Z",
+  "updated_at": "2026-06-23T00:00:00Z"
+}
+```
+
+`auth.value` and all `headers` values are always omitted from responses.
 
 ---
 
-## 8. Plugins / marketplace API
+## 8. Memories API
 
-- `GET /v1/plugins` → installed tools + plugins
-- `GET /v1/plugins/registry` → marketplace listing
-- `GET /v1/plugins/registry/{id}` → one registry entry
-- `GET /v1/plugins/installed` → installed plugins
-- `POST /v1/plugins/install` `{plugin_name, ...}` → result
-- `POST /v1/plugins/uninstall` `{plugin_name}` → result
+User-scoped; the gateway forces the scope to the authenticated key's user.
+Backed by `foundry.adaptive.AdaptiveService` (quill).
+
+### Endpoints
+
+- `GET /v1/memories?query=<text>&limit=<N>` → `{"memories":[Memory, ...]}`
+  - Without `query`: returns memories in recency order (`memory_list` RPC).
+  - With `query`: performs semantic search (`memory_search` RPC); results include `score`.
+- `POST /v1/memories` `{"text":"...","metadata":{"key":"val"}}` → **201** `{"id":"mem_..."}`
+  - **Field is `text`, not `content`**.
+- `DELETE /v1/memories/{id}` → `{"ok":true|false}`
+- `GET /v1/memories/stats` → `{"count":N,"last_added_at":"2026-06-23T…Z"|null}`
+
+### `Memory` object
+
+```json
+{ "id": "mem_...", "text": "...", "metadata": {"key":"val"}, "created_at": "2026-06-23T00:00:00Z", "score": 0.92 }
+```
+
+`score` is only present in search results.
 
 ---
 
-## 9. Project-management API (session-scoped)
+## 9. Plugins / marketplace API
 
-- Tasks: `GET/POST /v1/sessions/{id}/tasks`, `GET/PATCH/DELETE /v1/sessions/{id}/tasks/{task_id}`,
-  `POST .../move`, `PUT .../checklist`, `POST .../deps`, `DELETE .../deps/{blocks_task_id}`
-- Projects: `GET/POST /v1/sessions/{id}/projects`, `PATCH/DELETE /v1/sessions/{id}/projects/{project_id}`
-- Todos (read-only): `GET /v1/sessions/{id}/todos`
-- Schedules: `GET/POST /v1/schedules`, `PATCH/DELETE /v1/schedules/{task_id}`
-- Workflows: `GET/POST /v1/workflows`, `GET/PATCH/DELETE /v1/workflows/{workflow_id}`,
-  `POST /v1/workflows/lint`, `POST /v1/workflows/{workflow_id}/run`,
-  `GET /v1/workflows/runs/{run_id}`, `POST /v1/workflows/runs/{run_id}/cancel`
+Backed by `foundry.quiver.RegistryService` (quiver).
+
+### Endpoints
+
+- `GET /v1/plugins` → `{"tools":[BuiltinTool,...],"plugins":[Plugin,...]}`
+  - `tools` = built-in tool defs available to the model.
+  - `plugins` = the caller's installed plugin list with status.
+- `GET /v1/plugins/registry` → `{"plugins":[RegistryEntry,...]}`  (marketplace catalog)
+- `GET /v1/plugins/registry/{id}` → `{"plugin_id":"...","manifest":{...},"readme":"..."}`
+- `GET /v1/plugins/installed` → `{"installed":[InstalledPlugin,...]}`
+- `POST /v1/plugins/install` `{"plugin_name":"...","permissions":["..."],"secrets":{"key":"val"}}` → `{"installed":true}`
+  - **Field is `plugin_name`, not `id`**.
+- `POST /v1/plugins/uninstall` `{"plugin_name":"..."}` → `{"uninstalled":true}`
+  - **Field is `plugin_name`, not `id`**.
+
+### Key object shapes
+
+```json
+// BuiltinTool
+{ "name": "read_file", "description": "...", "category": "fs", "parameters": {} }
+
+// Plugin (installed, with status)
+{ "name": "my-plugin", "kind": "wasm", "status": "active", "configurable": true, "config_keys": ["API_KEY"], "error": null }
+
+// RegistryEntry
+{ "id": "pkg/my-plugin", "name": "my-plugin", "kind": "wasm", "description": "...", "version": "1.0.0", "author": "acme", "required_secrets": ["API_KEY"] }
+
+// InstalledPlugin
+{ "plugin_name": "my-plugin", "enabled": true, "permissions": ["fs:read"], "updated_at": "2026-06-23T00:00:00Z" }
+```
 
 ---
 
-## 10. Feature flags
+## 10. Project-management API
+
+Backed by `foundry.slate.PmService` (slate). Tasks and Projects are
+session-scoped. Schedules and Workflows are user-scoped.
+
+### Kanban tasks (session-scoped)
+
+- `GET /v1/sessions/{id}/tasks?project_id=<opt>` → `{"tasks":[TaskCard,...],"projects":[Project,...],"deps":[DependencyEdge,...]}`
+- `POST /v1/sessions/{id}/tasks` `{title,description?,projectId?,parentTaskId?,status?,priority?,labels?}` → **201** `{"taskId":"..."}`
+- `GET /v1/sessions/{id}/tasks/{task_id}` → `{"task":TaskCard,"subtasks":[TaskCard,...],"blocks":["tid",...],"blockedBy":["tid",...]}`
+- `PATCH /v1/sessions/{id}/tasks/{task_id}` `{title?,description?,status?,priority?,labels?,projectId?}` → `{"ok":true}`
+- `DELETE /v1/sessions/{id}/tasks/{task_id}` → `{"deleted":true}`
+- `POST /v1/sessions/{id}/tasks/{task_id}/move` `{status,sortOrder?}` → `{"ok":true}`
+- `PUT /v1/sessions/{id}/tasks/{task_id}/checklist` `{checklist:[...]}` → `{"ok":true}`
+- `POST /v1/sessions/{id}/tasks/{task_id}/deps` `{blocksTaskId:"..."}` → `{"ok":true}`
+- `DELETE /v1/sessions/{id}/tasks/{task_id}/deps/{blocks_task_id}` → `{"ok":true}`
+
+### Projects (session-scoped)
+
+- `GET /v1/sessions/{id}/projects` → `{"projects":[Project,...]}`
+- `POST /v1/sessions/{id}/projects` `{name,description?}` → **201** `{"projectId":"..."}`
+- `PATCH /v1/sessions/{id}/projects/{project_id}` `{name?,description?,archived?}` → `{"ok":true}`
+- `DELETE /v1/sessions/{id}/projects/{project_id}` → `{"deleted":true}`
+
+### Todos (session-scoped, read-only)
+
+- `GET /v1/sessions/{id}/todos` → `{"todos":[...]}` (model-managed; opaque object array)
+
+### Schedules (user-scoped)
+
+- `GET /v1/schedules` → `{"schedules":[Schedule,...]}`
+- `POST /v1/schedules` `{name,cronExpr,actionKind,actionPayload?}` → **201** `{"taskId":"..."}`
+- `PATCH /v1/schedules/{task_id}` `{enabled?,cronExpr?}` → `{"updated":true}`
+- `DELETE /v1/schedules/{task_id}` → `{"deleted":true}`
+
+### Workflows (user-scoped)
+
+- `GET /v1/workflows` → `{"workflows":[WorkflowSummary,...]}`
+- `POST /v1/workflows` `{name,source}` → **201** `{"workflowId":"..."}`
+- `GET /v1/workflows/{workflow_id}` → `WorkflowDetail` (includes `source`)
+- `PATCH /v1/workflows/{workflow_id}` `{name?,source?,enabled?}` → `{"ok":true}`
+- `DELETE /v1/workflows/{workflow_id}` → `{"deleted":true}`
+- `POST /v1/workflows/lint` `{source}` → `{"ok":bool,"errors":["..."]}`
+- `POST /v1/workflows/{workflow_id}/run` `{input?,trigger?}` → `{"runId":"...","status":"..."}`
+- `GET /v1/workflows/runs/{run_id}` → `WorkflowRun` (status + output + event log)
+- `POST /v1/workflows/runs/{run_id}/cancel` → `{"cancelled":true}`
+
+### Key object shapes
+
+```json
+// TaskCard
+{ "taskId":"t_...","projectId":null,"parentTaskId":null,"title":"Fix bug",
+  "description":null,"status":"todo","priority":"high","labels":[],"checklist":[],
+  "sortOrder":1.0,"createdAt":"2026-06-23T00:00:00Z","updatedAt":"2026-06-23T00:00:00Z" }
+
+// Project
+{ "projectId":"p_...","name":"Sprint 1","description":null,"archived":false,
+  "createdAt":"...","updatedAt":"..." }
+
+// DependencyEdge
+{ "taskId":"t_a","blocksTaskId":"t_b" }
+
+// Schedule
+{ "taskId":"s_...","name":"Daily standup","cronExpr":"0 9 * * 1-5",
+  "actionKind":"prompt","actionPayload":{"content":"Run standup"},"enabled":true,
+  "createdAt":"...","updatedAt":"...","lastRunAt":null,"nextRunAt":"..." }
+
+// WorkflowSummary
+{ "workflowId":"wf_...","name":"CI pipeline","compileStatus":"ok","enabled":true,
+  "createdAt":"...","updatedAt":"..." }
+
+// WorkflowDetail adds:  "source": "<workflow dsl>"
+
+// WorkflowRun
+{ "runId":"run_...","status":"completed","startedAt":"...","completedAt":"...",
+  "output":{"result":"ok"},"error":null,
+  "events":[{"seq":1,"ts":"...","level":"info","message":"Step 1 complete"}] }
+```
+
+---
+
+## 11. Feature flags
 
 - `GET /v1/flags` → `{"flags":{"v1.chat":true, ...}}` (which features the key may use)
 
 ---
 
-## SDK design requirements (all three languages)
+## 12. SDK design requirements (all three languages)
 
 1. **Client construction** with `api_key` (default from `SIMSE_API_KEY` /
    `ANTHROPIC_API_KEY` env), `base_url` (default `https://api.simse.dev`,
@@ -277,8 +441,9 @@ the orchestrator). Distinct from the stateless Messages API.
 2. **Resource namespaces:** `messages` (`.create`, `.stream`, `.count_tokens`),
    `models` (`.list`, `.retrieve`), `account`, `usage`, `billing`, `sessions`
    (`.create`, `.list`, `.retrieve`, `.delete`, `.prompt`/`.stream`, `.resume`,
-   `.abort`), `memories`, `plugins`, `pm` (tasks/projects/todos/schedules/
-   workflows), `flags`.
+   `.abort`), `connectors` (`.create`, `.list`, `.retrieve`, `.update`,
+   `.delete`, `.test`), `memories`, `plugins`, `pm` (tasks/projects/todos/
+   schedules/workflows), `flags`.
 3. **Streaming helpers:** `messages.stream(...)` yields typed events and
    accumulates a final `Message` (expose `.text_stream` / `.on("text")` /
    `finalMessage()` idioms per language).
