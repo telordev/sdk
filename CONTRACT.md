@@ -209,7 +209,8 @@ the orchestrator). Distinct from the stateless Messages API.
     - `headers` (object `{[key:string]:string}`, optional) — per-session static header overrides.
     Omitted from the wire body when absent.
 - `GET /v1/sessions` → `{"sessions":[{"id","title","message_count","created_at","updated_at","status"}]}`
-- `GET /v1/sessions/{id}` → session object
+  - List items do **not** include `system` or `metadata` (the list query omits these fields for performance).
+- `GET /v1/sessions/{id}` → session object including `system` (string | null) and `metadata` (object | null) when set at create time
 - `DELETE /v1/sessions/{id}` → `{}`
 - `POST /v1/sessions/{id}/messages` `{content, stream?}`
   - non-stream → `{"message":{"role":"assistant","content":"..."},"usage":{"input_tokens","output_tokens"}}`

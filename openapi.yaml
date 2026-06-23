@@ -1957,7 +1957,7 @@ components:
 
     ConnectorCreateParams:
       type: object
-      required: [name, type, url, auth]
+      required: [name, type, url]
       properties:
         name:
           type: string
