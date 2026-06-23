@@ -301,6 +301,219 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LegacyError'
+  /v1/connectors:
+    get:
+      tags:
+      - Connectors
+      summary: List all connectors for the caller.
+      operationId: listConnectors
+      responses:
+        '200':
+          description: Connector list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorList'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    post:
+      tags:
+      - Connectors
+      summary: Create an MCP connector.
+      operationId: createConnector
+      requestBody:
+        description: Connector creation parameters.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectorCreateParams'
+        required: true
+      responses:
+        '201':
+          description: Connector created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Connector'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/connectors/{id}:
+    get:
+      tags:
+      - Connectors
+      summary: Get a connector by ID.
+      operationId: getConnector
+      parameters:
+      - name: id
+        in: path
+        description: Connector ID.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Connector.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Connector'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Connector not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    delete:
+      tags:
+      - Connectors
+      summary: Delete a connector.
+      operationId: deleteConnector
+      parameters:
+      - name: id
+        in: path
+        description: Connector ID.
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: '`{deleted: true, id}`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeformObject'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Connector not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+    patch:
+      tags:
+      - Connectors
+      summary: Update a connector (partial update — all fields optional).
+      description: Accepts the same nested wire shape as create (all fields optional).
+      operationId: updateConnector
+      parameters:
+      - name: id
+        in: path
+        description: Connector ID.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: Fields to update.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectorUpdateParams'
+        required: true
+      responses:
+        '200':
+          description: Updated connector.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Connector'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Connector not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+  /v1/connectors/{id}/test:
+    post:
+      tags:
+      - Connectors
+      summary: Test MCP connectivity for a connector (always HTTP 200 — reports, not fails).
+      description: |-
+        Request body (optional JSON):
+        ```json
+        { "bearer": "...", "headers": { "X-Foo": "bar" } }
+        ```
+
+        Response (always 200 — this endpoint REPORTS connectivity, it does NOT fail
+        the HTTP request on a bad bearer or transport error):
+        ```json
+        { "ok": true,  "tool_count": 3 }
+        { "ok": false, "error": "MCP auth error: HTTP 401 from MCP endpoint" }
+        ```
+
+        - Body `bearer` overrides the connector's stored default bearer.
+        - Body `headers` merges with (does NOT replace) the connector's stored
+          `static_headers`.
+      operationId: testConnector
+      parameters:
+      - name: id
+        in: path
+        description: Connector ID.
+        required: true
+        schema:
+          type: string
+      requestBody:
+        description: Optional `{bearer?, headers?}` overrides for the test probe.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FreeformObject'
+        required: true
+      responses:
+        '200':
+          description: Connectivity result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorTestResult'
+        '401':
+          description: Missing/invalid credential.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '404':
+          description: Connector not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
   /v1/flags:
     get:
       tags:
@@ -1660,11 +1873,11 @@ paths:
       summary: Create an agentic session.
       operationId: createSession
       requestBody:
-        description: '`{model?, title?}`'
+        description: Session creation parameters.
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/FreeformObject'
+              $ref: '#/components/schemas/SessionCreateRequest'
         required: true
       responses:
         '201':
@@ -1673,6 +1886,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Session'
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
         '401':
           description: Missing/invalid credential.
           content:
@@ -1965,6 +2184,14 @@ paths:
       description: |-
         Reconstructs the conversation from the durable chat-store: the message
         history plus tool-call records, interleaved by `created_at` on the client.
+
+        **Resume is READ-ONLY history rehydration — no `PromptRequest` is issued
+        here.** The per-session `system` prompt and `connectors` are injected on
+        the *next* `/messages` call (in `post_message`, which fetches the session
+        and builds `PromptSettings` before forwarding to the orchestrator). If a
+        server-side resume-prompt is ever added in the future, it MUST also inject
+        `settings.system_prompt` + `settings.connectors` so the orchestrator uses
+        the correct context on that turn.
       operationId: resumeSession
       parameters:
       - name: id
@@ -2822,6 +3049,215 @@ components:
           type: string
         status:
           type: string
+    Connector:
+      type: object
+      description: |-
+        A connector object (all response shapes).  `auth.value` and header values
+        are always redacted — secrets never leave the platform.
+      required:
+      - id
+      - user_id
+      - name
+      - type
+      - url
+      - created_at
+      - updated_at
+      properties:
+        auth:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/ConnectorResponseAuth'
+            description: Auth metadata (value redacted).  Present whenever auth was set.
+        created_at:
+          type: string
+        headers:
+          type:
+          - object
+          - 'null'
+          description: Header keys are preserved; values are replaced with `"***"`.
+        id:
+          type: string
+        name:
+          type: string
+        tool_allowlist:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+        tool_denylist:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+        type:
+          type: string
+          description: Protocol type — currently always `"mcp"`.
+        updated_at:
+          type: string
+        url:
+          type: string
+        user_id:
+          type: string
+    ConnectorAuth:
+      type: object
+      description: |-
+        Auth config on a connector request body.
+
+        `kind` must be `"bearer"`.  `value` is write-only — it is never returned
+        in responses.  `per_session` controls whether the session-scoped bearer
+        (passed at session-create time) replaces the stored default bearer.
+      required:
+      - kind
+      properties:
+        kind:
+          type: string
+          description: Must be `"bearer"`.
+          example: bearer
+        per_session:
+          type:
+          - boolean
+          - 'null'
+          description: |-
+            When `true`, the session-scoped bearer (from `SessionConnector.bearer`)
+            replaces the connector's stored default bearer for that session.
+        value:
+          type:
+          - string
+          - 'null'
+          description: The bearer token.  **Write-only** — never returned in any response.
+    ConnectorCreateParams:
+      type: object
+      description: '`POST /v1/connectors` request body.'
+      required:
+      - name
+      - type
+      - url
+      properties:
+        auth:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/ConnectorAuth'
+            description: Optional auth config.  Absent = no auth.
+        headers:
+          type:
+          - object
+          - 'null'
+          description: Static headers sent on every MCP request.  Values are **write-only**.
+        name:
+          type: string
+          description: Human-readable name.
+          example: my-mcp
+        tool_allowlist:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+          description: Restrict tool calls to this allowlist (empty = all allowed).
+        tool_denylist:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+          description: Deny-list of tool names (takes precedence over allowlist).
+        type:
+          type: string
+          description: Connector protocol type.  Only `"mcp"` is supported.
+          example: mcp
+        url:
+          type: string
+          description: The MCP server endpoint URL.
+          example: https://mcp.example.com/mcp
+    ConnectorList:
+      type: object
+      description: '`GET /v1/connectors` response.'
+      required:
+      - connectors
+      properties:
+        connectors:
+          type: array
+          items:
+            $ref: '#/components/schemas/Connector'
+    ConnectorResponseAuth:
+      type: object
+      description: Auth metadata on a connector response.  `value` is NEVER returned.
+      required:
+      - kind
+      properties:
+        kind:
+          type: string
+          description: Always `"bearer"`.
+        per_session:
+          type:
+          - boolean
+          - 'null'
+          description: Whether the session-scoped bearer replaces the stored default.
+    ConnectorTestResult:
+      type: object
+      description: |-
+        `POST /v1/connectors/{id}/test` response.
+
+        Always HTTP 200 — the test endpoint **reports** connectivity rather than
+        failing the HTTP request on a transport/auth error.
+      required:
+      - ok
+      properties:
+        error:
+          type:
+          - string
+          - 'null'
+          description: Human-readable error description (only present when `ok=false`).
+        ok:
+          type: boolean
+          description: '`true` = `tools/list` succeeded.'
+        tool_count:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          description: Number of tools the MCP server advertises (only present when `ok=true`).
+          minimum: 0
+    ConnectorUpdateParams:
+      type: object
+      description: '`PATCH /v1/connectors/{id}` request body — all fields optional.'
+      properties:
+        auth:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/ConnectorAuth'
+            description: Auth update.  Only `"bearer"` kind is accepted.
+        headers:
+          type:
+          - object
+          - 'null'
+          description: Replacement static headers map.  Values are **write-only**.
+        name:
+          type:
+          - string
+          - 'null'
+          description: New human-readable name.
+        tool_allowlist:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+          description: Replacement tool allowlist.
+        tool_denylist:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+          description: Replacement tool denylist.
+        url:
+          type:
+          - string
+          - 'null'
+          description: New MCP server endpoint URL.
     CountTokensRequest:
       type: object
       description: |-
@@ -3418,6 +3854,61 @@ components:
           type:
           - string
           - 'null'
+    SessionConnector:
+      type: object
+      description: |-
+        One connector to attach when creating a session.
+
+        The per-session fields (`bearer`, `headers`) take precedence over the
+        connector's stored defaults for the lifetime of that session.
+      required:
+      - connector_id
+      properties:
+        bearer:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Session-scoped bearer override (replaces stored default when
+            `ConnectorAuth.per_session = true` or unconditionally when the
+            connector has `per_session = true`).
+        connector_id:
+          type: string
+          description: The connector to attach.
+        headers:
+          type:
+          - object
+          - 'null'
+          description: Additional headers merged with the connector's stored static headers.
+    SessionCreateRequest:
+      type: object
+      description: '`POST /v1/sessions` request body.'
+      properties:
+        connectors:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/SessionConnector'
+          description: MCP connectors to attach at session create time.
+        metadata:
+          type:
+          - object
+          - 'null'
+          description: 'Opaque `{key: value}` metadata object.'
+        model:
+          type:
+          - string
+          - 'null'
+        system:
+          type:
+          - string
+          - 'null'
+          description: System prompt text for the session.
+        title:
+          type:
+          - string
+          - 'null'
     SessionPromptRequest:
       type: object
       description: '`POST /v1/sessions/{id}/messages` request body.'
@@ -3717,6 +4208,8 @@ tags:
   description: Session-scoped kanban + user-scoped schedules / workflows.
 - name: Library
   description: User research/knowledge library + binary artifacts.
+- name: Connectors
+  description: MCP connector management (create/list/get/update/delete/test).
 - name: Flags
   description: Feature-flag discovery.
 - name: Meta
